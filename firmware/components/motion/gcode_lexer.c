@@ -47,9 +47,6 @@ const char* lexer_get_next_token(const char* cursor, GCodeToken* token) {  // po
         token->type = TOKEN_ERROR;
     }
 
-    if  (*cursor >= 'a' && *cursor <= 'z') {
-        token->letter = toupper((unsigned char)*cursor);
-    }
     token->letter = *cursor;
     cursor++;
 
