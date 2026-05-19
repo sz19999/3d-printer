@@ -1,11 +1,5 @@
 # EE Bachelor's Capstone Project - Cartesian 3D Printer
 
-## Goal
-
-Build a cartesian custom cartesian 3d printer, from the physical aspect to the firmware and hardware. Design the firmware which controls the printer and the main board printed circuit board.
-
-# EE Bachelor's Capstone Project: Custom Cartesian 3D Printer
-
 ## Project Overview
 This project involves the ground-up design and programming of a custom Cartesian 3D printer. This capstone project focuses on developing a hardware and software ecosystem — spanning from custom PCB design to a custom firmware.
 
