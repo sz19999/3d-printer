@@ -13,6 +13,7 @@
 // 
 // reset printer and turn off:
 // 
+// RAmbo Jambo Alejandro
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
