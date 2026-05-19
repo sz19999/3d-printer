@@ -21,36 +21,6 @@
 
 #include "gcode_lexer.h"
 
-char* a = "G1 F523 X12 Y22.7 Z0 ; Move to (12,22.7,0)";
-
-void main() { 
-    const char *cursor = a; // yes ptr, no data
-    GCodeToken currentToken;
-
-    while (*cursor != '\0') {
-
-        if (strcmp(cursor, " ")) {
-
-            cursor = lexer_get_next_token(cursor, &currentToken);
-            printf("%.2f\n", currentToken.value);
-    
-            switch (currentToken.type) {
-                case 0:
-                    printf("TOKEN_VALID\n");
-                    break;
-                case 1:
-                    printf("TOKEN_EOF\n");
-                    break;
-                case 2:
-                    printf("TOKEN_ERROR\n");
-                    break;
-            }
-        }
-        
-        for (int i = 0; i < 2000000000; i++);  // delay
-    }
-}
-
 const char* lexer_get_next_token(const char* cursor, GCodeToken* token) {  // pointer to a constant character
     // skip spaces
     while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
@@ -65,22 +35,26 @@ const char* lexer_get_next_token(const char* cursor, GCodeToken* token) {  // po
         return cursor;
     }
 
-    // extract character
-    if(*cursor >= 'A' && *cursor <= 'Z'){
+    if  (*cursor >= 'a' && *cursor <= 'z') {  //convert to uppercase
+        token->letter = toupper((unsigned char)*cursor);
+        token->type = TOKEN_VALID;
+    }
+    else if((*cursor >= 'A' && *cursor <= 'Z')) {
         token->type = TOKEN_VALID;
     }
     else {
         token->type = TOKEN_ERROR;
     }
 
+    if  (*cursor >= 'a' && *cursor <= 'z') {
+        token->letter = toupper((unsigned char)*cursor);
+    }
     token->letter = *cursor;
     cursor++;
 
     // extract value
     char* tmp_ptr;
     token->value = strtof(cursor, &tmp_ptr); // str to f -> string to float
-
-    printf("%s\n", cursor);
 
     return tmp_ptr;
 }
