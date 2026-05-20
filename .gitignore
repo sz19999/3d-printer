@@ -1,7 +1,7 @@
 
 # ESP-IDF Build Artifacts
 firmware/build/
-firmware/sdkconfig.old
+firmware/sdkconfig
 firmware/dependencies.lock
 
 
