@@ -1,9 +1,10 @@
-#include "../firmware/components/motion/inc/gcode_lexer.h"
+
+#include "gcode_lexer.h"
 #include <stdio.h>
 
 char* gcode_line = "G1 F523 X12 Y22.7 Z0 ; Move to (12,22.7,0)";
 
-void main() { 
+int main() { 
     const char *cursor = gcode_line; // read only
     GCodeToken currentToken;
 
@@ -34,4 +35,8 @@ void main() {
         
         for (int i = 0; i < 2000000000; i++);  // delay
     }
+
+    printf("\nTest completed successfully!\n");
+
+    return 0;
 }
