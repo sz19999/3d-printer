@@ -1,0 +1,6 @@
+{
+    "espIdf.initCmd": "",
+    "espIdf.clientResultCache": "",
+    "espIdf.projectPathWin": "${workspaceFolder}/firmware",
+    "espIdf.projectPathLinux": "${workspaceFolder}/firmware"
+}
