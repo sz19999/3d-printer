@@ -1,11 +1,11 @@
 
-# ESP-IDF Build Artifacts
+# ESP-IDF builds
 firmware/build/
 firmware/sdkconfig
 firmware/dependencies.lock
 
 
-# Host-Side Test Build Artifacts (Your Makefile)
+# host-side test builds
 tests/build/
 *.exe
 *.o
