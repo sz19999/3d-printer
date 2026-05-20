@@ -51,10 +51,10 @@ $(BUILD_DIR)/%.o: ../core/%.c | $(BUILD_DIR)
 
 # make build/ dir if it doesn't exist
 $(BUILD_DIR):
-	@if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
+	@mkdir -p $(BUILD_DIR)
 
 
 # CLEAN UP: Just type 'make clean' to wipe out executables
 clean:
 	@echo Cleaning up build artifacts...
-	@if exist $(BUILD_DIR) rmdir /s /q $(BUILD_DIR)
+	@rm -rf $(BUILD_DIR)
