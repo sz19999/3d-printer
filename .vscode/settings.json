@@ -1,6 +1,5 @@
 {
-    "espIdf.initCmd": "",
-    "espIdf.clientResultCache": "",
-    "espIdf.projectPathWin": "${workspaceFolder}/firmware",
-    "espIdf.projectPathLinux": "${workspaceFolder}/firmware"
+    "idf.openOcdConfigs": [
+        "board/esp32s3-builtin.cfg"
+    ]
 }
