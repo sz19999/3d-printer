@@ -1,19 +1,4 @@
-// an example for a gcode file:
-// 
-// init 3d printer:
-// G10 ... ; (a comment) absolute position
-// M108 S100 ; start heating hotend to 100C
-// M200 S60 ; start heating bed to 60C
-// ..
-//
-// printing starts here:
-// G0 X55.0 Y0.0 Z0.0 ; move printer head to (55.0, 0.0, 0.0)
-// G1 X60.0 Y10.0 Z0.0 F55 ; move in a line to (60, 10, 0) and extrude 55mm/s
-// ...
-// 
-// reset printer and turn off:
-// 
-// RAmbo Jambo Alejandro
+
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
