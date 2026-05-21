@@ -11,4 +11,3 @@ tests/build/
 *.o
 *.log
 .vscode/
-.vscode/settings.json
