@@ -5,8 +5,10 @@ firmware/sdkconfig.old
 firmware/dependencies.lock
 
 
-# host-side test builds
+# host-side files, builds, etc.
 tests/build/
 *.exe
 *.o
 *.log
+.vscode/
+.vscode/settings.json
