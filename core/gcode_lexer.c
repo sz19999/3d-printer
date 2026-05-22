@@ -21,11 +21,8 @@ const char* lexer_get_next_token(const char* cursor, GCodeToken* token) {  // po
         return cursor;
     }
 
-    if  (*cursor >= 'a' && *cursor <= 'z') {  //convert to uppercase
-        token->letter = toupper((unsigned char)*cursor);
-        token->type = TOKEN_VALID;
-    }
-    else if((*cursor >= 'A' && *cursor <= 'Z')) {
+    if  ((*cursor >= 'a' && *cursor <= 'z') || (*cursor >= 'A' && *cursor <= 'Z')) {
+        token->letter = toupper((unsigned char)*cursor); //convert to uppercase
         token->type = TOKEN_VALID;
     }
     else {
