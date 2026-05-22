@@ -24,7 +24,7 @@ all:
 
 # link ONLY the lexer files
 lexer: $(LEXER_TARGET)
-	@echo    RUNNING ISOLATED LEXER TEST
+	@echo RUNNING ISOLATED LEXER TEST
 	@.\$(LEXER_TARGET)
 
 $(LEXER_TARGET): $(BUILD_DIR)/lexer_test.o $(BUILD_DIR)/gcode_lexer.o
@@ -33,8 +33,8 @@ $(LEXER_TARGET): $(BUILD_DIR)/lexer_test.o $(BUILD_DIR)/gcode_lexer.o
 
 # parser isn't ready to be tested yet, when ready update rule target to "parser"
 # link ONLY the parser files
-parser.disabled: $(PARSER_TARGET)
-	@echo    RUNNING PARSER TEST
+parser: $(PARSER_TARGET)
+	@echo RUNNING PARSER TEST
 	@.\$(PARSER_TARGET)
 
 $(PARSER_TARGET): $(BUILD_DIR)/parser_test.o $(BUILD_DIR)/gcode_parser.o $(BUILD_DIR)/gcode_lexer.o
