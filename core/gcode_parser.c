@@ -1,28 +1,32 @@
 #include <stdio.h>
+#include <stdbool.h>
 #include "gcode_lexer.h"
 #include "gcode_parser.h"
-#include <stdbool.h>
-//
-void apply_token_to_command(const GCodeToken* tok, GCodeCommand* cmd);
-//
-GCodeCommand cmd;
-GCodeToken token;
-char gcode_line[] = "G1 F523 X12 Y22.7 Z0 ; Move to (12,22.7,0)";
-char* cursor = gcode_line;
-//
-void parsCommand (GCodeCommand cmd){
 
-  while(token.type != TOKEN_EOF){
-    cursor = lexer_get_next_token(cursor , &token); // step 1 - extracting a token
-    apply_token_to_command(&token, &cmd);
-  }
+static bool apply_token_to_command(const GCodeToken* tok, GCodeCommand* cmd);
+bool parse_command(const char* gcode_line, GCodeCommand* cmd);
 
+bool parse_command(const char* gcode_line, GCodeCommand* cmd) {
+    
+    const char* cursor = gcode_line;
+    GCodeToken current_token;
+
+  do {
+    cursor = lexer_get_next_token(cursor , &current_token);                  // 1. extract a token
+    bool applied_successfully = apply_token_to_command(&current_token, cmd); // 2. then parse the token
+
+    if (!applied_successfully) {
+        cmd->type = CMD_INVALID;
+        return false;
+    }
+  } while (current_token.type != TOKEN_EOF);
+
+  cmd->type = CMD_VALID;
+  return true;
 }
 
+static bool apply_token_to_command(const GCodeToken* tok, GCodeCommand* cmd) {
 
-// Assuming your Lexer outputs a Token struct like this:
-// { char letter; float value; }
-void apply_token_to_command(const GCodeToken* tok, GCodeCommand* cmd) {
     switch (tok->letter) {
         case 'G':
         case 'M':
@@ -59,7 +63,11 @@ void apply_token_to_command(const GCodeToken* tok, GCodeCommand* cmd) {
             cmd->P = tok->value;
             break;
         default:
-            // Handle invalid token letters
-            break;
+            // handle invalid token letters
+            if (tok->type != TOKEN_EOF) {
+                return false;
+            }
     }
+
+    return true;
 }
