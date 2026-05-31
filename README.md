@@ -11,7 +11,7 @@ This project involves the ground-up design and programming of a custom Cartesian
 
 
 ## System Architecture
-** Add a block diagram later on **
+*    **[HW & SW Architecture Diagram](./docs/assets/)** - Architectural block diagrams
 
 
 ## Technical Stack & Tools
