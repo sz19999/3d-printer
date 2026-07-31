@@ -297,25 +297,42 @@ void compute_master_axis_steps_per_mm(PlannedMotion* motion, float deltas[]) {
 
 
 void init_buffer(RingBuffer* buffer) {
-
+    buffer->head = 0;
+    buffer->tail = 0;
+    buffer->count = 0;
 }
 
-bool is_empty(RingBuffer* buffer) {
-
+bool is_empty(const RingBuffer* buffer) {
+    return buffer->count == 0;
 }
 
-bool is_full(RingBuffer* buffer) {
-
+bool is_full(const RingBuffer* buffer) {
+    return buffer->count == BUFFER_SIZE;
 }
 
-bool append(RingBuffer* buffer, PlannedMotion* motion) {
+bool append(RingBuffer* buffer, const PlannedMotion* motion) {
+    if (is_full(buffer)) return false;
 
+    buffer->arr[buffer->head] = *motion;
+    buffer->head = (buffer->head + 1) % BUFFER_SIZE;
+    buffer->count += 1;
+
+    return true;
 }
 
-PlannedMotion* remove(RingBuffer* buffer) {
+void remove(RingBuffer* buffer) {
+    if (is_empty(buffer)) return;
 
+    buffer->count = buffer->count - 1;
+    buffer->tail = (buffer->tail + 1) % BUFFER_SIZE;
 }
 
-uint8_t count(RingBuffer* buffer) {
+PlannedMotion* front(RingBuffer* buffer) {
+    if (is_empty(buffer)) return NULL;
 
+    return &(buffer->arr[buffer->tail]);
+}
+
+uint8_t count(const RingBuffer* buffer) {
+    return buffer->count;
 }

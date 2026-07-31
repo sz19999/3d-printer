@@ -52,7 +52,7 @@ typedef struct
 } PointMM;
 
 typedef struct {
-    PlannedMotion buffer[BUFFER_SIZE];
+    PlannedMotion arr[BUFFER_SIZE];
     uint8_t tail;
     uint8_t head;
     uint8_t count;
