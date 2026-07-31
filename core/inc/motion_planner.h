@@ -56,7 +56,7 @@ typedef struct {
     uint8_t tail;
     uint8_t head;
     uint8_t count;
-} ;
+} RingBuffer;
 
 
 #endif
