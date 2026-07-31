@@ -10,7 +10,7 @@ typedef struct {
     // motion planner parameters
     float path_length_mm;           // total Cartesian path length (mm)
     float unit_vec[NUM_AXES];       // direction unit vector (ux, uy, uz, ue)
-    float master_steps_per_mm;      // scale factor: (master_steps / path_length_mm) ???
+    float master_steps_per_mm;      // velocity scale factor: (master_steps / path_length_mm)
     
     float v_cruise;                 // desired cruise velocity (mm/s)
     float v_entry;                  // entry velocity from junction planner (mm/s)

@@ -40,7 +40,7 @@ void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion) {
     compute_steps(motion, &target_steps, &current_steps);
 
     // find master axis steps
-    compute_master_axis_steps(motion);
+    compute_master_axis_steps(motion, deltas_mm);
 
     // compute step directions
     evaluate_step_directions(motion, &current_steps, &target_steps);
@@ -78,9 +78,15 @@ void forward_pass(PlannedMotion planned_motions[]) {
 
 
 
-// auxiliary function of create_initial_profile():
+/* 
+    ************************************************
+    auxiliary functions of create_initial_profile():
+    ************************************************
+*/
 
-// scale the cruise speed so each component of the vector doesnt exceed each axis top speed
+/*
+    scale the cruise speed so each component of the vector doesnt exceed each axis top speed
+*/
 float limit_velocity(float v_target, float ux, float uy, float uz, float ue) {
     float v_allowed = v_target;     // v_target > 0, it is a scalar
 
@@ -153,6 +159,9 @@ void compute_max_path_acceleration(PlannedMotion* motion) {
     }
 }
 
+/*
+    computes initial trapezoidal profile velocities: v_start, v_end and v_cruise
+*/
 void compute_profile_velocities(GCodeCommand* gcode_cmd, PlannedMotion* motion, float* v_target_mm_s) {
     float ux = motion->unit_vec[0];
     float uy = motion->unit_vec[1];
@@ -218,6 +227,9 @@ void compute_deltas_mm(float deltas_mm[] ,PointMM* target_mm,PointMM* current_mm
     deltas_mm[3] = de_mm;
 }
 
+/*
+    computes the cartesian length using pythagoras theorem
+*/
 float compute_cartesian_length(float deltas_mm[]) {
     float squared_sum = 0;
 
@@ -228,6 +240,9 @@ float compute_cartesian_length(float deltas_mm[]) {
     return sqrtf(squared_sum);
 }
 
+/*
+    computes total effective path length
+*/
 void compute_total_path_length(PlannedMotion* motion, float deltas_mm[]) {
     float cartesian_length = compute_cartesian_length(deltas_mm);
     float total_length = cartesian_length;
@@ -241,10 +256,32 @@ void compute_total_path_length(PlannedMotion* motion, float deltas_mm[]) {
     motion->path_length_mm = total_length;
 }
 
-void find_master_axis_steps_and_mm(PlannedMotion* motion) {
-    float master_mm = 0.0f;
+/*
+    finds the master axis and computes its electrical steps
+*/
+void compute_master_axis_steps(PlannedMotion* motion, float deltas[]) {
+    uint32_t master_steps = 0;
+    uint8_t master_axis = 0;    // x - 0, y - 1, z - 2, e - 3; 
     
     for (uint32_t i = 0; i < NUM_AXES; i++) {
+        if (fabsf(deltas[i]) > master_steps) {
+            master_steps = (uint32_t)lroundf(fabsf(deltas[i]));
+            master_axis = i;
+        }
+    }
 
+    motion->master_axis = master_axis;
+    motion->master_steps = master_steps;
+}
+
+/*
+    computes the velocity scale factor
+*/
+void compute_master_axis_steps_per_mm(PlannedMotion* motion, float deltas[]) {
+    if (motion->path_length_mm > 0.0001f) {
+        motion->master_steps_per_mm = motion->master_steps / motion->path_length_mm;
+    }
+    else {
+        motion->master_steps_per_mm = 0.0f;
     }
 }
