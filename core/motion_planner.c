@@ -3,6 +3,7 @@
 #include "gcode_parser.h"
 
 #include <math.h>
+#include <stdbool.h>
 
 /* 
     handles a single motion struct kinematics. 
@@ -83,6 +84,7 @@ void forward_pass(PlannedMotion planned_motions[]) {
     auxiliary functions of create_initial_profile():
     ************************************************
 */
+
 
 /*
     scale the cruise speed so each component of the vector doesnt exceed each axis top speed
@@ -284,4 +286,36 @@ void compute_master_axis_steps_per_mm(PlannedMotion* motion, float deltas[]) {
     else {
         motion->master_steps_per_mm = 0.0f;
     }
+}
+
+
+/*
+    ***************************
+    ring buffer implementation:
+    ***************************
+*/
+
+
+void init_buffer(PlannedMotion* buffer) {
+
+}
+
+bool is_empty(PlannedMotion* buffer) {
+
+}
+
+bool is_full(PlannedMotion* buffer) {
+
+}
+
+bool append(PlannedMotion* buffer, PlannedMotion* motion) {
+
+}
+
+PlannedMotion* remove(PlannedMotion* buffer) {
+
+}
+
+uint8_t count(PlannedMotion* buffer) {
+    
 }

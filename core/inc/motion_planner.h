@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-#define NUM_AXES 4 // X, Y, Z, E
+#define NUM_AXES    4   // X, Y, Z, E
+#define BUFFER_SIZE 16
 
 // Motion block consumed by the Step Generator task
 typedef struct {
@@ -50,7 +51,12 @@ typedef struct
     float x, y, z, e;
 } PointMM;
 
-
+typedef struct {
+    PlannedMotion buffer[BUFFER_SIZE];
+    uint8_t tail;
+    uint8_t head;
+    uint8_t count;
+} ;
 
 
 #endif
