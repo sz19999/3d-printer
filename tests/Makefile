@@ -1,7 +1,7 @@
 
 # SYSTEM CONFIGURATION
 CC = gcc
-CFLAGS = -Wall -Wextra -g -I../core/inc
+CFLAGS = -Wall -Wextra -g -I.. -I../core/inc
 
 
 # This is where all compiler output will go
@@ -11,6 +11,7 @@ BUILD_DIR = build
 # Executable outputs
 LEXER_TARGET = $(BUILD_DIR)/run_lexer_test.exe
 PARSER_TARGET = $(BUILD_DIR)/run_parser_test.exe
+RING_TARGET = $(BUILD_DIR)/run_ring_buffer_test.exe
 
 
 # DEFAULT RULE: shows what units are available for test
@@ -19,6 +20,7 @@ all:
 	@echo Available test modules:
 	@echo   make lexer    - Runs isolated G-Code Lexer tests
 	@echo   make parser   - Runs isolated G-Code Parser tests
+	@echo   make ring 	  - Runs isolated ring buffer tests
 	@echo   make clean    - Wipes out test executables
 
 
@@ -38,6 +40,13 @@ parser: $(PARSER_TARGET)
 	@.\$(PARSER_TARGET)
 
 $(PARSER_TARGET): $(BUILD_DIR)/parser_test.o $(BUILD_DIR)/gcode_parser.o $(BUILD_DIR)/gcode_lexer.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+ring: $(RING_TARGET)
+	@echo RUNNING RING BUFFER TEST
+	@.\$(RING_TARGET)
+
+$(RING_TARGET): $(BUILD_DIR)/ring_buffer_test.o $(BUILD_DIR)/motion_planner.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 
