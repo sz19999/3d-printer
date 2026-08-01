@@ -4,12 +4,16 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <string.h> // for memset func
 
 /* 
     handles a single motion struct kinematics. 
     this function gets a raw gcode block and prepares an initial trapezoidal acceleration profile. 
 */
 void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion) {
+
+    // initialize all PlannedMotion struct fields
+    memset(motion, 0, sizeof(PlannedMotion));
 
     static PointMM current_mm = {0.0f, 0.0f, 0.0f, 0.0f};
     static PointSteps current_steps = {0, 0, 0, 0};
@@ -45,6 +49,9 @@ void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion) {
 
     // compute step directions
     evaluate_step_directions(motion, &current_steps, &target_steps);
+
+    // compute master axis steps per mm
+    compute_master_axis_steps_per_mm(motion);
 
     // advance position tracking for next call
     current_mm = target_mm;
@@ -279,7 +286,7 @@ void compute_master_axis_steps(PlannedMotion* motion, float deltas[]) {
 /*
     computes the velocity scale factor
 */
-void compute_master_axis_steps_per_mm(PlannedMotion* motion, float deltas[]) {
+void compute_master_axis_steps_per_mm(PlannedMotion* motion) {
     if (motion->path_length_mm > 0.0001f) {
         motion->master_steps_per_mm = motion->master_steps / motion->path_length_mm;
     }
@@ -320,7 +327,7 @@ bool append(RingBuffer* buffer, const PlannedMotion* motion) {
     return true;
 }
 
-void remove(RingBuffer* buffer) {
+void pop(RingBuffer* buffer) {
     if (is_empty(buffer)) return;
 
     buffer->count = buffer->count - 1;
