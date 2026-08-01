@@ -55,10 +55,10 @@ typedef struct
 } PointMM;
 
 typedef struct {
-    PlannedMotion arr[BUFFER_SIZE];
-    uint8_t tail;
-    uint8_t head;
-    uint8_t count;
+    PlannedMotion arr[BUFFER_SIZE];  // a buffer which holds the motion profiles
+    uint8_t tail;   // points on the oldest block
+    uint8_t head;   // points on the next empty block space
+    uint8_t count;  // holds the number of occupied slots in the buffer
 } RingBuffer;
 
 void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion);

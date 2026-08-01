@@ -60,10 +60,72 @@ void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion) {
 
 
 /* 
-    computes the safe junction velocity between two lines
+    computes a safe junction velocity between two lines.
+    an image of the calculations is provided in the assets folder
 */
-void compute_junction_velocity(PlannedMotion planned_motions[]) {
+void compute_junction_velocity(RingBuffer* buffer) {
+    // check if there're at least two motion structs, if not, return
+    if (buffer->count < 2) return;
+
+    // else, calc junction velocity:
     
+    // do a dot product between the current and the next lines unit vectors.
+    // this gives us the cosine of the angle between the two line vectors.
+    
+    // extract the indexes of the last two inserted motion profiles
+    uint8_t curr_idx = (buffer->head + BUFFER_SIZE - 1) % BUFFER_SIZE;
+    uint8_t prev_idx = (curr_idx + BUFFER_SIZE - 1) % BUFFER_SIZE;
+
+    // extract N and N-1 motion profiles unit vectors
+    float ux1 = buffer->arr[prev_idx].unit_vec[0];
+    float uy1 = buffer->arr[prev_idx].unit_vec[1];
+    float uz1 = buffer->arr[prev_idx].unit_vec[2];
+    float ue1 = buffer->arr[prev_idx].unit_vec[3];
+
+    float ux2 = buffer->arr[curr_idx].unit_vec[0];
+    float uy2 = buffer->arr[curr_idx].unit_vec[1];
+    float uz2 = buffer->arr[curr_idx].unit_vec[2];
+    float ue2 = buffer->arr[curr_idx].unit_vec[3];
+
+    // do the dot product
+    // phi is the angle between the vectors
+    float cos_phi = (ux1 * ux2) + (uy1 * uy2) + (uz1 * uz2) + (ue1 * ue2);
+    float epsilon = 0.00001f;
+
+    // clamp the cosine against floating point error
+    if (cos_phi > 1.0f) {
+        cos_phi = 1.0f;
+    }
+    else if (cos_phi < -1.0f) {
+        cos_phi = -1.0f;
+    }
+
+    float v_junction = 0.0f;
+
+    // check edge cases
+    if (cos_phi + epsilon > 1.0f) {
+        // if the angle is 0 degrees, lines are in the same direction
+        v_junction = buffer->arr[prev_idx].v_cruise;
+    }
+    else if (cos_phi - epsilon < -1.0f) {
+        // if the angle is 180 degrees, lines are opposite directions
+        v_junction = 0.0f;
+    }
+    else {
+        // check other cases: 0 < angle < 180
+        
+        // theta is the real angle between the two physical lines
+        float cos_half_phi = sqrtf((1 + cos_phi) / 2); // trigo identity
+
+        float j = JUNCTION_DEVIATION;   // the distance between the real junction point and the theoretical arc center
+        float a = buffer->arr[prev_idx].max_path_acceleration; // the max centripetal acceleration is the same max path acceleration
+    
+        v_junction = sqrtf( (j * a * cos_half_phi) / (1 - cos_half_phi) );
+    }
+
+    // update the v_entry and v_exit of the appropriate motion blocks
+    buffer->arr[prev_idx].v_exit = v_junction;
+    buffer->arr[curr_idx].v_entry = v_junction;
 }
 
 
