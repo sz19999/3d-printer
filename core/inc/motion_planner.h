@@ -1,7 +1,10 @@
 #ifndef MOTION_PLANNER_H
 #define MOTION_PLANNER_H
 
+#include <stdbool.h>
 #include <stdint.h>
+
+#include "gcode_parser.h"
 
 #define NUM_AXES    4   // X, Y, Z, E
 #define BUFFER_SIZE 16
@@ -58,5 +61,31 @@ typedef struct {
     uint8_t count;
 } RingBuffer;
 
+void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion);
+void compute_junction_velocity(PlannedMotion planned_motions[]);
+void backward_pass(PlannedMotion planned_motions[]);
+void forward_pass(PlannedMotion planned_motions[]);
+
+float limit_velocity(float v_target, float ux, float uy, float uz, float ue);
+void compute_unit_vectors(PlannedMotion* motion, float deltas_mm[]);
+void compute_max_path_acceleration(PlannedMotion* motion);
+void compute_profile_velocities(GCodeCommand* gcode_cmd, PlannedMotion* motion, float* v_target_mm_s);
+void update_target_coordinate(GCodeCommand* gcode_cmd, PointMM* target_mm);
+void compute_steps(PlannedMotion* motion, PointSteps* target_steps, PointSteps* current_steps);
+void convert_from_mm_to_steps(PointSteps* target_steps, PointMM* target_mm);
+void evaluate_step_directions(PlannedMotion* motion, PointSteps* current_steps, PointSteps* target_steps);
+void compute_deltas_mm(float deltas_mm[], PointMM* target_mm, PointMM* current_mm);
+float compute_cartesian_length(float deltas_mm[]);
+void compute_total_path_length(PlannedMotion* motion, float deltas_mm[]);
+void compute_master_axis_steps(PlannedMotion* motion, float deltas[]);
+void compute_master_axis_steps_per_mm(PlannedMotion* motion);
+
+void init_buffer(RingBuffer* buffer);
+bool is_empty(const RingBuffer* buffer);
+bool is_full(const RingBuffer* buffer);
+bool append(RingBuffer* buffer, const PlannedMotion* motion);
+void pop(RingBuffer* buffer);
+PlannedMotion* front(RingBuffer* buffer);
+uint8_t count(const RingBuffer* buffer);
 
 #endif
