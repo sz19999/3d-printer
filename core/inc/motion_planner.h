@@ -13,7 +13,9 @@
 typedef struct {
     // motion planner parameters
     float path_length_mm;           // total Cartesian path length (mm)
+    float total_vector_length;      
     float unit_vec[NUM_AXES];       // direction unit vector (ux, uy, uz, ue)
+    float cartesian_unit_vec[NUM_AXES - 1];
     float master_steps_per_mm;      // velocity scale factor: (master_steps / path_length_mm)
     
     float v_cruise;                 // desired cruise velocity (mm/s)
@@ -21,6 +23,7 @@ typedef struct {
     float v_exit;                   // exit velocity for next block (mm/s)
     
     float max_path_acceleration;    // max path acceleration allowed for this move 
+    float max_vector_acceleration;  
     
     // pre-calculated step generator parameters
     uint8_t dir_bits;           // dir_bits = [-, -, -, -, x_dir, y_dir, z_dir, e_dir]
@@ -62,13 +65,14 @@ typedef struct {
 } RingBuffer;
 
 void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion);
-void compute_junction_velocity(PlannedMotion planned_motions[]);
+void compute_junction_velocity(RingBuffer* buffer);
 void backward_pass(PlannedMotion planned_motions[]);
 void forward_pass(PlannedMotion planned_motions[]);
 
-float limit_velocity(float v_target, float ux, float uy, float uz, float ue);
+float limit_velocity(float v_target, float ux, float uy, float uz);
 void compute_unit_vectors(PlannedMotion* motion, float deltas_mm[]);
-void compute_max_path_acceleration(PlannedMotion* motion);
+void compute_path_and_vector_lengths(PlannedMotion* motion, float deltas_mm[]);
+void compute_max_path_and_vector_acceleration(PlannedMotion* motion);
 void compute_profile_velocities(GCodeCommand* gcode_cmd, PlannedMotion* motion, float* v_target_mm_s);
 void update_target_coordinate(GCodeCommand* gcode_cmd, PointMM* target_mm);
 void compute_steps(PlannedMotion* motion, PointSteps* target_steps, PointSteps* current_steps);
@@ -76,7 +80,7 @@ void convert_from_mm_to_steps(PointSteps* target_steps, PointMM* target_mm);
 void evaluate_step_directions(PlannedMotion* motion, PointSteps* current_steps, PointSteps* target_steps);
 void compute_deltas_mm(float deltas_mm[], PointMM* target_mm, PointMM* current_mm);
 float compute_cartesian_length(float deltas_mm[]);
-void compute_total_path_length(PlannedMotion* motion, float deltas_mm[]);
+void compute_path_and_vector_lengths(PlannedMotion*motion, float deltas_mm[]);
 void compute_master_axis_steps(PlannedMotion* motion, float deltas[]);
 void compute_master_axis_steps_per_mm(PlannedMotion* motion);
 
@@ -87,5 +91,7 @@ bool append(RingBuffer* buffer, const PlannedMotion* motion);
 void pop(RingBuffer* buffer);
 PlannedMotion* front(RingBuffer* buffer);
 uint8_t count(const RingBuffer* buffer);
+
+
 
 #endif
