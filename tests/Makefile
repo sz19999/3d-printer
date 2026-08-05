@@ -12,6 +12,7 @@ BUILD_DIR = build
 LEXER_TARGET = $(BUILD_DIR)/run_lexer_test.exe
 PARSER_TARGET = $(BUILD_DIR)/run_parser_test.exe
 RING_TARGET = $(BUILD_DIR)/run_ring_buffer_test.exe
+JUNC_TARGET = $(BUILD_DIR)/run_junction_test.exe
 
 
 # DEFAULT RULE: shows what units are available for test
@@ -21,6 +22,7 @@ all:
 	@echo   make lexer    - Runs isolated G-Code Lexer tests
 	@echo   make parser   - Runs isolated G-Code Parser tests
 	@echo   make ring 	  - Runs isolated ring buffer tests
+	@echo   make junc     - Runs isolated junction velocity tests
 	@echo   make clean    - Wipes out test executables
 
 
@@ -47,6 +49,14 @@ ring: $(RING_TARGET)
 	@.\$(RING_TARGET)
 
 $(RING_TARGET): $(BUILD_DIR)/ring_buffer_test.o $(BUILD_DIR)/motion_planner.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+
+junc: $(JUNC_TARGET)
+	@echo RUNNING JUNC VELOCITY TEST
+	@.\$(JUNC_TARGET)
+
+$(JUNC_TARGET): $(BUILD_DIR)/junction_velocity_test.o $(BUILD_DIR)/motion_planner.o $(BUILD_DIR)/gcode_parser.o $(BUILD_DIR)/gcode_lexer.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 
