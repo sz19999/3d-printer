@@ -26,18 +26,18 @@ void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion) {
     float deltas_mm[4];     // holds dx, dy, dz, de
     compute_deltas_mm(deltas_mm ,&target_mm, &current_mm);
 
-    // compute total vector length
-    compute_total_path_length(motion, deltas_mm);
+    // compute total vector length & path length
+    compute_path_and_vector_lengths(motion, deltas_mm);
 
     // compute unit vectors
     compute_unit_vectors(motion, deltas_mm);
     
     // kinematics and speed limit calculations
-    static float v_target_mm_s = 100.0f / 60.0f; // default speed 100 mm/min -> mm/s
-    compute_profile_velocities(gcode_cmd, motion, &v_target_mm_s);
+    static float active_feedrate = 3000.0f / 60.0f;  // default speed 3000 mm/min -> mm/s
+    compute_profile_velocities(gcode_cmd, motion, &active_feedrate);
 
-    // compute max path acceleration
-    compute_max_path_acceleration(motion);
+    // compute max path and vector accelerations
+    compute_max_path_and_vector_acceleration(motion);
 
     // convert & compute absolute integer step targets
     PointSteps target_steps;
@@ -76,20 +76,18 @@ void compute_junction_velocity(RingBuffer* buffer) {
     uint8_t curr_idx = (buffer->head + BUFFER_SIZE - 1) % BUFFER_SIZE;
     uint8_t prev_idx = (curr_idx + BUFFER_SIZE - 1) % BUFFER_SIZE;
 
-    // extract N and N-1 motion profiles unit vectors
-    float ux1 = buffer->arr[prev_idx].unit_vec[0];
-    float uy1 = buffer->arr[prev_idx].unit_vec[1];
-    float uz1 = buffer->arr[prev_idx].unit_vec[2];
-    float ue1 = buffer->arr[prev_idx].unit_vec[3];
+    // extract N and N-1 motion profiles cartesian unit vectors
+    float ux1 = buffer->arr[prev_idx].cartesian_unit_vec[0];
+    float uy1 = buffer->arr[prev_idx].cartesian_unit_vec[1];
+    float uz1 = buffer->arr[prev_idx].cartesian_unit_vec[2];
 
-    float ux2 = buffer->arr[curr_idx].unit_vec[0];
-    float uy2 = buffer->arr[curr_idx].unit_vec[1];
-    float uz2 = buffer->arr[curr_idx].unit_vec[2];
-    float ue2 = buffer->arr[curr_idx].unit_vec[3];
+    float ux2 = buffer->arr[curr_idx].cartesian_unit_vec[0];
+    float uy2 = buffer->arr[curr_idx].cartesian_unit_vec[1];
+    float uz2 = buffer->arr[curr_idx].cartesian_unit_vec[2];
 
     // do the dot product
     // phi is the angle between the vectors
-    float cos_phi = (ux1 * ux2) + (uy1 * uy2) + (uz1 * uz2) + (ue1 * ue2);
+    float cos_phi = (ux1 * ux2) + (uy1 * uy2) + (uz1 * uz2);
     float epsilon = 0.00001f;
 
     // clamp the cosine against floating point error
@@ -115,12 +113,20 @@ void compute_junction_velocity(RingBuffer* buffer) {
         // check other cases: 0 < angle < 180
         
         // theta is the real angle between the two physical lines
-        float cos_half_phi = sqrtf((1 + cos_phi) / 2); // trigo identity
+        float cos_half_phi = sqrtf((1.0f + cos_phi) / 2.0f); // trigo identity
 
         float j = JUNCTION_DEVIATION;   // the distance between the real junction point and the theoretical arc center
         float a = buffer->arr[prev_idx].max_path_acceleration; // the max centripetal acceleration is the same max path acceleration
-    
-        v_junction = sqrtf( (j * a * cos_half_phi) / (1 - cos_half_phi) );
+        
+        v_junction = sqrtf( (j * a * cos_half_phi) / (1.0f - cos_half_phi) );
+
+        // clamp the junction speed, mustn't be higher than the cruise speed
+        if (v_junction > buffer->arr[prev_idx].v_cruise) {
+            v_junction = buffer->arr[prev_idx].v_cruise;
+        }
+        if (v_junction > buffer->arr[curr_idx].v_cruise) {
+            v_junction = buffer->arr[curr_idx].v_cruise;
+        }
     }
 
     // update the v_entry and v_exit of the appropriate motion blocks
@@ -158,7 +164,7 @@ void forward_pass(PlannedMotion planned_motions[]) {
 /*
     scale the cruise speed so each component of the vector doesnt exceed each axis top speed
 */
-float limit_velocity(float v_target, float ux, float uy, float uz, float ue) {
+float limit_velocity(float v_target, float ux, float uy, float uz) {
     float v_allowed = v_target;     // v_target > 0, it is a scalar
 
     if (fabsf(ux) > 0.0001f) {
@@ -176,11 +182,6 @@ float limit_velocity(float v_target, float ux, float uy, float uz, float ue) {
         if (vz_limit < v_allowed) v_allowed = vz_limit; 
     }
 
-    if (fabsf(ue) > 0.0001f) {
-        float ve_limit = MAX_VELOCITY_E / fabsf(ue);     
-        if (ve_limit < v_allowed) v_allowed = ve_limit; 
-    }
-
     return v_allowed;
 }
 
@@ -189,13 +190,14 @@ void compute_unit_vectors(PlannedMotion* motion, float deltas_mm[]) {
     float dy_mm = deltas_mm[1];
     float dz_mm = deltas_mm[2];
     float de_mm = deltas_mm[3];
-    float total_length = motion->path_length_mm;
+    float total_length = motion->total_vector_length;
 
     float ux = 0.0f;
     float uy = 0.0f;
     float uz = 0.0f;
     float ue = 0.0f;
-
+    
+    // compute unit vectors of the 4d vector
     if (total_length > 0.0001f) {
         float len_inv = 1.0f / total_length;  // calculate divison once
         ux = dx_mm * len_inv;
@@ -208,24 +210,59 @@ void compute_unit_vectors(PlannedMotion* motion, float deltas_mm[]) {
     motion->unit_vec[1] = uy;
     motion->unit_vec[2] = uz;
     motion->unit_vec[3] = ue;
+
+    // calculate cartesian unit vectors
+    ux = 0;
+    uy = 0;
+    uz = 0;
+    float cartesian_length = motion->path_length_mm;
+
+    if (cartesian_length > 0.0001f) {
+        float len_inv = 1.0f / cartesian_length;  // calculate divison once
+        ux = dx_mm * len_inv;
+        uy = dy_mm * len_inv;
+        uz = dz_mm * len_inv;
+    }
+
+    motion->cartesian_unit_vec[0] = ux;
+    motion->cartesian_unit_vec[1] = uy;
+    motion->cartesian_unit_vec[2] = uz;
 }
 
-void compute_max_path_acceleration(PlannedMotion* motion) {
-    float accelerations[4] = {0, 0, 0, 0};
+void compute_max_path_and_vector_acceleration(PlannedMotion* motion) {
+    float accelerations[NUM_AXES] = {0, 0, 0, 0};
     float ux = motion->unit_vec[0];
     float uy = motion->unit_vec[1];
     float uz = motion->unit_vec[2];
     float ue = motion->unit_vec[3];
 
+    // compute max vector acceleration
     if (fabsf(ux) > 0.0001f) accelerations[0] = MAX_ACCELERATION_X / fabsf(ux);
     if (fabsf(uy) > 0.0001f) accelerations[1] = MAX_ACCELERATION_Y / fabsf(uy);
     if (fabsf(uz) > 0.0001f) accelerations[2] = MAX_ACCELERATION_Z / fabsf(uz);
     if (fabsf(ue) > 0.0001f) accelerations[3] = MAX_ACCELERATION_E / fabsf(ue);
 
-    motion->max_path_acceleration = 1e9f;
-    for (uint32_t i = 0; i < NUM_AXES; i++) {
-        if (accelerations[i] < motion->max_path_acceleration ) {
-            motion->max_path_acceleration = accelerations[i];
+    motion->max_vector_acceleration = accelerations[0];
+    for (uint32_t i = 1; i < NUM_AXES; i++) {
+        if (accelerations[i] < motion->max_vector_acceleration) {
+            motion->max_vector_acceleration = accelerations[i];
+        }
+    }
+
+    // compute max path acceleration
+    float path_accels[NUM_AXES - 1] = {1e9f, 1e9f, 1e9f};
+    ux = motion->cartesian_unit_vec[0];
+    uy = motion->cartesian_unit_vec[1];
+    uz = motion->cartesian_unit_vec[2];
+
+    if (fabsf(ux) > 0.0001f) path_accels[0] = MAX_ACCELERATION_X / fabsf(ux);
+    if (fabsf(uy) > 0.0001f) path_accels[1] = MAX_ACCELERATION_Y / fabsf(uy);
+    if (fabsf(uz) > 0.0001f) path_accels[2] = MAX_ACCELERATION_Z / fabsf(uz);
+
+    motion->max_path_acceleration = path_accels[0];
+    for (uint32_t i = 1; i < NUM_AXES - 1; i++) {
+        if (path_accels[i] < motion->max_path_acceleration) {
+            motion->max_path_acceleration = path_accels[i];
         }
     }
 }
@@ -233,15 +270,16 @@ void compute_max_path_acceleration(PlannedMotion* motion) {
 /*
     computes initial trapezoidal profile velocities: v_start, v_end and v_cruise
 */
-void compute_profile_velocities(GCodeCommand* gcode_cmd, PlannedMotion* motion, float* v_target_mm_s) {
-    float ux = motion->unit_vec[0];
-    float uy = motion->unit_vec[1];
-    float uz = motion->unit_vec[2];
-    float ue = motion->unit_vec[3];
+void compute_profile_velocities(GCodeCommand* gcode_cmd, PlannedMotion* motion, float* active_feedrate) {
+    float ux = motion->cartesian_unit_vec[0];
+    float uy = motion->cartesian_unit_vec[1];
+    float uz = motion->cartesian_unit_vec[2];
 
-    if (gcode_cmd->has_F) *v_target_mm_s = (gcode_cmd->F) / 60.0f;       // extract desired feedrate and convert to mm/s
-    motion->v_cruise = limit_velocity(*v_target_mm_s, ux, uy, uz, ue);   // find max feasible cruise speed
-    motion->v_entry = motion->v_exit = 0;                               // set default enter and exit speeds
+
+
+    if (gcode_cmd->has_F) *active_feedrate = (gcode_cmd->F) / 60.0f;       // extract desired feedrate and convert to mm/s
+    motion->v_cruise = limit_velocity(*active_feedrate, ux, uy, uz);    // find max feasible cruise speed
+    motion->v_entry = motion->v_exit = 0.0f;                            // set default enter and exit speeds
 }
 
 void update_target_coordinate(GCodeCommand* gcode_cmd, PointMM* target_mm) {
@@ -314,7 +352,7 @@ float compute_cartesian_length(float deltas_mm[]) {
 /*
     computes total effective path length
 */
-void compute_total_path_length(PlannedMotion* motion, float deltas_mm[]) {
+void compute_path_and_vector_lengths(PlannedMotion* motion, float deltas_mm[]) {
     float cartesian_length = compute_cartesian_length(deltas_mm);
     float total_length = cartesian_length;
     float de_mm = deltas_mm[3];
@@ -324,7 +362,8 @@ void compute_total_path_length(PlannedMotion* motion, float deltas_mm[]) {
         total_length = fabsf(de_mm);
     }
 
-    motion->path_length_mm = total_length;
+    motion->path_length_mm = cartesian_length;
+    motion->total_vector_length = total_length;
 }
 
 /*
