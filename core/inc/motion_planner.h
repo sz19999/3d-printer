@@ -7,9 +7,9 @@
 #include "gcode_parser.h"
 
 #define NUM_AXES    4   // X, Y, Z, E
-#define BUFFER_SIZE 16
+#define BUFFER_SIZE 16  // ring buffer size
 
-// Motion block consumed by the Step Generator task
+// motion block consumed by the Step Generator task
 typedef struct {
     // motion planner parameters
     float path_length_mm;           // total Cartesian path length (mm)
@@ -64,11 +64,14 @@ typedef struct {
     uint8_t count;  // holds the number of occupied slots in the buffer
 } RingBuffer;
 
+// main motion planner functions
 void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion);
 void compute_junction_velocity(RingBuffer* buffer);
-void backward_pass(PlannedMotion planned_motions[]);
-void forward_pass(PlannedMotion planned_motions[]);
+void backward_pass(RingBuffer* buffer);
+void forward_pass(RingBuffer* buffer);
+void recalculate_cruise_speed(RingBuffer* buffer);
 
+// helper functions
 float limit_velocity(float v_target, float ux, float uy, float uz);
 void compute_unit_vectors(PlannedMotion* motion, float deltas_mm[]);
 void compute_path_and_vector_lengths(PlannedMotion* motion, float deltas_mm[]);
@@ -84,6 +87,7 @@ void compute_path_and_vector_lengths(PlannedMotion*motion, float deltas_mm[]);
 void compute_master_axis_steps(PlannedMotion* motion, float deltas[]);
 void compute_master_axis_steps_per_mm(PlannedMotion* motion);
 
+// ring buffer API
 void init_buffer(RingBuffer* buffer);
 bool is_empty(const RingBuffer* buffer);
 bool is_full(const RingBuffer* buffer);

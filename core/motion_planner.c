@@ -2,6 +2,7 @@
 #include "motion_planner.h"
 #include "gcode_parser.h"
 
+#include <stdio.h>
 #include <math.h>
 #include <stdbool.h>
 #include <string.h> // for memset func
@@ -139,18 +140,124 @@ void compute_junction_velocity(RingBuffer* buffer) {
     does a backward pass on the planned motion profiles in the ring buffer, in order to check if the printer can
     decelerate safely based on the given entry velocity, path length and exit velocity of each profile.
 */
-void backward_pass(PlannedMotion planned_motions[]) {
+void backward_pass(RingBuffer* buffer) {
+    // early exit
+    if (buffer->count < 2) {
+        return;
+    }
 
+    // compute indexes of the current watched profile and it's previous
+    uint8_t curr_idx = (buffer->head + BUFFER_SIZE - 1) % BUFFER_SIZE;  // start at (head - 1)
+    //printf("\ncurrent index: %d\n", curr_idx);
+    
+    // backward pass
+    while (curr_idx != buffer->tail) {
+        uint8_t prev_idx = (curr_idx + BUFFER_SIZE - 1) % BUFFER_SIZE;
+        //printf("previous index: %d\n", prev_idx);
+
+        // extract required parameters
+        float v_entry = buffer->arr[curr_idx].v_entry;
+        float v_exit = buffer->arr[curr_idx].v_exit;
+        float distance = buffer->arr[curr_idx].path_length_mm;
+        float acceleration = buffer->arr[curr_idx].max_path_acceleration;
+
+        // compute max theoretical v_enty in order to safely reach v_exit
+        float v_entry_max = sqrtf(v_exit * v_exit + 2.0f * acceleration * distance); // kinematical equation: Vf^2 = Vi^2 + 2*a*s
+
+        //printf("v_entry: %f\n", v_entry);
+        //printf("v_exit: %f\n", v_exit);
+        //printf("distance: %f\n", distance);
+        //printf("acceleration: %f\n", acceleration);
+        //printf("v_entry_max: %f\n", v_entry_max);
+
+        // clamp v_entry and previous profile v_exit
+        if (v_entry > v_entry_max) {
+            buffer->arr[curr_idx].v_entry = v_entry_max;
+            buffer->arr[prev_idx].v_exit  = v_entry_max;
+        }
+
+        //printf("new v_entry: %f\n", buffer->arr[curr_idx].v_entry);
+
+        curr_idx = prev_idx;
+    }
 }
 
 /*
     does a forward pass on the planned motion profiles in order to check if the printer can
     accelerate to the desired cruise velocity based on the entry speed, path length, and exit velocity of each profile.
 */
-void forward_pass(PlannedMotion planned_motions[]) {
+void forward_pass(RingBuffer* buffer) {
+    // early exit
+    if (buffer->count < 2) {
+        return;
+    }
 
+    // compute indexes of the current watched profile and it's next
+    uint8_t curr_idx = buffer->tail;
+    uint8_t next_idx = (curr_idx + 1) % BUFFER_SIZE;
+
+    // forward pass
+    while (next_idx != buffer->head) {
+        // extract required parameters
+        float v_entry = buffer->arr[curr_idx].v_entry;
+        float v_exit = buffer->arr[curr_idx].v_exit;
+        float distance = buffer->arr[curr_idx].path_length_mm;
+        float acceleration = buffer->arr[curr_idx].max_path_acceleration;
+
+        // compute max theoretical v_enty in order to safely reach v_exit
+        float v_exit_max = sqrtf(v_entry * v_entry + 2.0f * acceleration * distance); // kinematical equation: Vf^2 = Vi^2 + 2*a*s
+
+        // clamp v_exit and next profile v_entry
+        if (v_exit > v_exit_max) {
+            buffer->arr[curr_idx].v_exit = v_exit_max;
+            buffer->arr[next_idx].v_entry = v_exit_max;
+        }
+
+        curr_idx = next_idx;
+        next_idx = (curr_idx + 1) % BUFFER_SIZE;
+    }
 }
 
+/*
+    after setting safe entry and exit velocities, we need to verify if the desired cruise speed is achievable,
+    if not clamp it. 
+*/
+void recalculate_cruise_speed(RingBuffer* buffer) {
+    // early exit
+    if (buffer->count < 2) {
+        return;
+    }
+
+    uint8_t curr_idx = buffer->tail;
+
+    // iterate the motion profiles buffer
+    while (curr_idx != buffer->head) {
+        // extract required parameters
+        float v_entry = buffer->arr[curr_idx].v_entry;
+        float v_exit = buffer->arr[curr_idx].v_exit;
+        float distance = buffer->arr[curr_idx].path_length_mm;
+        float acceleration = buffer->arr[curr_idx].max_path_acceleration;
+        float v_cruise = buffer->arr[curr_idx].v_cruise;
+
+        // compute max theoretical v_cruise: Vc^2 = (Vi^2 + Vf^2 + 2*a*d) / 2
+        float v_cruise_max = sqrtf((v_exit * v_exit + v_entry * v_entry + 2.0f * acceleration * distance) / 2.0f);
+
+        // clamp v_cruise
+        if (v_cruise > v_cruise_max) {
+            buffer->arr[curr_idx].v_cruise = v_cruise_max;
+        }
+
+        curr_idx = (curr_idx + 1) % BUFFER_SIZE;
+    }
+}
+
+
+/*
+
+*/
+void finalize_motion_profiles(RingBuffer* buffer) {
+
+}
 
 
 
