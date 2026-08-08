@@ -12,7 +12,7 @@ BUILD_DIR = build
 LEXER_TARGET = $(BUILD_DIR)/run_lexer_test.exe
 PARSER_TARGET = $(BUILD_DIR)/run_parser_test.exe
 RING_TARGET = $(BUILD_DIR)/run_ring_buffer_test.exe
-JUNC_TARGET = $(BUILD_DIR)/run_junction_test.exe
+PLAN_TARGET = $(BUILD_DIR)/run_planner_test.exe
 
 
 # DEFAULT RULE: shows what units are available for test
@@ -22,7 +22,7 @@ all:
 	@echo   make lexer    - Runs isolated G-Code Lexer tests
 	@echo   make parser   - Runs isolated G-Code Parser tests
 	@echo   make ring 	  - Runs isolated ring buffer tests
-	@echo   make junc     - Runs isolated junction velocity tests
+	@echo   make plan     - Runs isolated motion planner tests
 	@echo   make clean    - Wipes out test executables
 
 
@@ -35,7 +35,6 @@ $(LEXER_TARGET): $(BUILD_DIR)/lexer_test.o $(BUILD_DIR)/gcode_lexer.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 
-# parser isn't ready to be tested yet, when ready update rule target to "parser"
 # link ONLY the parser files
 parser: $(PARSER_TARGET)
 	@echo RUNNING PARSER TEST
@@ -44,6 +43,7 @@ parser: $(PARSER_TARGET)
 $(PARSER_TARGET): $(BUILD_DIR)/parser_test.o $(BUILD_DIR)/gcode_parser.o $(BUILD_DIR)/gcode_lexer.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# link ONLY the ring buffer files
 ring: $(RING_TARGET)
 	@echo RUNNING RING BUFFER TEST
 	@.\$(RING_TARGET)
@@ -51,12 +51,12 @@ ring: $(RING_TARGET)
 $(RING_TARGET): $(BUILD_DIR)/ring_buffer_test.o $(BUILD_DIR)/motion_planner.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-
-junc: $(JUNC_TARGET)
+# link ONLY the motion planner files
+plan: $(PLAN_TARGET)
 	@echo RUNNING JUNC VELOCITY TEST
-	@.\$(JUNC_TARGET)
+	@.\$(PLAN_TARGET)
 
-$(JUNC_TARGET): $(BUILD_DIR)/junction_velocity_test.o $(BUILD_DIR)/motion_planner.o $(BUILD_DIR)/gcode_parser.o $(BUILD_DIR)/gcode_lexer.o
+$(PLAN_TARGET): $(BUILD_DIR)/motion_planner_test.o $(BUILD_DIR)/motion_planner.o $(BUILD_DIR)/gcode_parser.o $(BUILD_DIR)/gcode_lexer.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 
