@@ -5,13 +5,15 @@
 
 #define CMDS_NUM 4
 
+void print_buffer(RingBuffer*);
+
 int main() {
     // move in a 10 by 10 square
     char* raw_gcode_cmds[CMDS_NUM] = { 
-                                        "G1 X10.0 Y0.0 Z0.0 F3400",
-                                        "G1 X10.0 Y10.0 Z0.0 F3300",
-                                        "G1 X0.0 Y10.0 Z0.0 F3200",
-                                        "G1 X0.0 Y0.0 Z0.0 F3100"
+                                        "G1 X10.0 Y0.0 Z0.0 F3500",
+                                        "G1 X10.0 Y1.0 Z0.0 F3500",
+                                        "G1 X11.0 Y1.0 Z0.0 F3500",
+                                        "G1 X11.0 Y2.0 Z0.0 F3500"
                                     };
     
     // init queue cmds
@@ -45,21 +47,40 @@ int main() {
             return 2;
         }
 
+        // compute junction velocity
+        printf("\n~~~ iteration no. %d ~~~\n", j);
         compute_junction_velocity(&buffer);
-        j++;
-    }
+        print_velocities(&buffer);
+        
+        // do forward and backward passes
+        backward_pass(&buffer);
+        printf("\ndoing a backward pass:\n");
+        print_velocities(&buffer);
 
-    // print ring buffer contents
-    j = 0;
-    while (j < CMDS_NUM) {
-        printf("\n~~~ motion block %d ~~~\n", j);
-        printf("entry speed: %f\n", buffer.arr[j].v_entry);
-        printf("cruise speed: %f\n", buffer.arr[j].v_cruise);
-        printf("exit speed: %f\n", buffer.arr[j].v_exit);
+        forward_pass(&buffer);
+        printf("\ndoing a forward pass:\n");
+        print_velocities(&buffer);
+
+        recalculate_cruise_speed(&buffer);
+        printf("\nrecalculating cruise speed:\n");
+        print_velocities(&buffer);
+
         j++;
     }
 
     printf("\n~~~ TESTS FINISHED SUCCESSFULLY ~~~");
 
     return 0;
+}
+
+void print_velocities(RingBuffer* buffer) {
+    // print ring buffer contents
+    int j = 0;
+    while (j < CMDS_NUM) {
+        printf("\n~~~ motion block %d ~~~\n", j);
+        printf("entry speed: %f\n", buffer->arr[j].v_entry);
+        printf("cruise speed: %f\n", buffer->arr[j].v_cruise);
+        printf("exit speed: %f\n", buffer->arr[j].v_exit);
+        j++;
+    }
 }
