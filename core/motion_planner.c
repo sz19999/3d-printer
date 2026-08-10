@@ -525,9 +525,6 @@ void compute_master_axis_steps(PlannedMotion* motion) {
     uint32_t master_steps = 0;
     uint8_t master_axis = 0;    // x - 0, y - 1, z - 2, e - 3; 
     
-    // steps per mm for each axis: x, y, z, e
-    float steps_per_mm[] = {STEPS_PER_MM_BELT, STEPS_PER_MM_BELT, STEPS_PER_MM_SCREW, STEPS_PER_MM_GEAR};
-    
     for (uint32_t i = 0; i < NUM_AXES; i++) {
         uint32_t axis_steps = motion->steps[i];
         if (axis_steps > master_steps) {

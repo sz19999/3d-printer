@@ -5,7 +5,8 @@
 
 #define CMDS_NUM 4
 
-void print_buffer(RingBuffer*);
+void print_velocities(RingBuffer*);
+void print_profiles(RingBuffer*);
 
 int main() {
     // move in a 10 by 10 square
@@ -65,6 +66,10 @@ int main() {
         printf("\nrecalculating cruise speed:\n");
         print_velocities(&buffer);
 
+        finalize_motion_profiles(&buffer);
+        printf("\nrecalculating cruise speed:\n");
+        print_profiles(&buffer);
+
         j++;
     }
 
@@ -76,11 +81,55 @@ int main() {
 void print_velocities(RingBuffer* buffer) {
     // print ring buffer contents
     int j = 0;
-    while (j < CMDS_NUM) {
+    while (j < buffer->count) {
+        uint8_t idx = (buffer->tail + j) % BUFFER_SIZE;
         printf("\n~~~ motion block %d ~~~\n", j);
-        printf("entry speed: %f\n", buffer->arr[j].v_entry);
-        printf("cruise speed: %f\n", buffer->arr[j].v_cruise);
-        printf("exit speed: %f\n", buffer->arr[j].v_exit);
+        printf("entry speed: %f\n", buffer->arr[idx].v_entry);
+        printf("cruise speed: %f\n", buffer->arr[idx].v_cruise);
+        printf("exit speed: %f\n", buffer->arr[idx].v_exit);
+        j++;
+    }
+}
+
+void print_profiles(RingBuffer* buffer) {
+    // print ring buffer contents
+    int j = 0;
+    while (j < buffer->count) {
+        uint8_t idx = (buffer->tail + j) % BUFFER_SIZE;
+        printf("\n~~~ motion block %d ~~~\n", j);
+        printf("motion planner parameters:\n");
+        printf("path length mm: %.2f\n", buffer->arr[idx].path_length_mm);
+        printf("total vector len: %.2f\n", buffer->arr[idx].total_vector_length);
+        printf("unit vector: (%.2f, %.2f, %.2f, %.2f)\n", 
+            buffer->arr[idx].unit_vec[0],
+            buffer->arr[idx].unit_vec[1],
+            buffer->arr[idx].unit_vec[2],
+            buffer->arr[idx].unit_vec[3]
+        );
+        printf("cartesian unit vector: (%.2f, %.2f, %.2f)\n", 
+            buffer->arr[idx].unit_vec[0],
+            buffer->arr[idx].unit_vec[1],
+            buffer->arr[idx].unit_vec[2]
+        );
+        printf("entry speed: %.2f\n", buffer->arr[idx].v_entry);
+        printf("cruise speed: %.2f\n", buffer->arr[idx].v_cruise);
+        printf("exit speed: %.2f\n", buffer->arr[idx].v_exit);
+        printf("max path acceleration: %.2f\n", buffer->arr[idx].max_path_acceleration);
+        printf("max vec acceleration: %.2f\n", buffer->arr[idx].max_vector_acceleration);
+        printf("dir bits: %x\n", buffer->arr[idx].dir_bits);
+        printf("master axis: %d\n", buffer->arr[idx].master_axis);
+        printf("master steps: %d\n", buffer->arr[idx].master_steps);
+        printf("master steps per mm: %.2f\n", buffer->arr[idx].master_steps_per_mm);
+        printf("steps: (%d, %d, %d, %d)\n",
+            buffer->arr[idx].steps[0],
+            buffer->arr[idx].steps[1],
+            buffer->arr[idx].steps[2],
+            buffer->arr[idx].steps[3]
+        );
+        printf("accel steps: %d\n", buffer->arr[idx].accel_steps);
+        printf("cruise steps: %d\n", buffer->arr[idx].cruise_steps);
+        printf("decel steps: %d\n", buffer->arr[idx].decel_steps);
+
         j++;
     }
 }

@@ -11,7 +11,7 @@
 
 // motion block consumed by the Step Generator task
 typedef struct {
-    // motion planner parameters
+    // motion planner parameters:
     float path_length_mm;           // total Cartesian path length (mm)
     float total_vector_length;      
     float unit_vec[NUM_AXES];       // direction unit vector (ux, uy, uz, ue)
@@ -24,7 +24,7 @@ typedef struct {
     float max_path_acceleration;    // max path acceleration allowed for this move 
     float max_vector_acceleration;  
     
-    // pre-calculated step generator parameters
+    // pre-calculated step generator parameters:
     uint8_t dir_bits;           // dir_bits = [-, -, -, -, x_dir, y_dir, z_dir, e_dir]
     uint8_t master_axis;        // axis with the most steps 
     uint32_t steps[NUM_AXES];   // number of steps of each axis -> steps[] = [x_steps, y_steps, z_steps, e_steps]
@@ -70,6 +70,7 @@ void compute_junction_velocity(RingBuffer* buffer);
 void backward_pass(RingBuffer* buffer);
 void forward_pass(RingBuffer* buffer);
 void recalculate_cruise_speed(RingBuffer* buffer);
+void finalize_motion_profiles(RingBuffer* buffer);
 
 // helper functions
 float limit_velocity(float v_target, float ux, float uy, float uz);
