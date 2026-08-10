@@ -16,7 +16,6 @@ typedef struct {
     float total_vector_length;      
     float unit_vec[NUM_AXES];       // direction unit vector (ux, uy, uz, ue)
     float cartesian_unit_vec[NUM_AXES - 1];
-    float master_steps_per_mm;      // velocity scale factor: (master_steps / path_length_mm)
     
     float v_cruise;                 // desired cruise velocity (mm/s)
     float v_entry;                  // entry velocity from junction planner (mm/s)
@@ -30,20 +29,21 @@ typedef struct {
     uint8_t master_axis;        // axis with the most steps 
     uint32_t steps[NUM_AXES];   // number of steps of each axis -> steps[] = [x_steps, y_steps, z_steps, e_steps]
     uint32_t master_steps;
-
-    uint32_t initial_period;    // v_start pulse period
-    uint32_t cruise_period;
-    uint32_t final_period;
+    float master_steps_per_mm;  // velocity scale factor: (master_steps / path_length_mm)
+    
+    //uint32_t initial_period;    // v_start pulse period
+    //uint32_t cruise_period;
+    //uint32_t final_period;
 
     uint32_t accel_steps;       // how much steps to accelerate
     uint32_t decel_steps;
-    int32_t  accel_rate_factor; // how much consecutive pulses periods differ
-    int32_t  decel_rate_factor;
+    uint32_t cruise_steps;
+    //int32_t  accel_rate_factor; // how much consecutive pulses periods differ
 
     // additional 
-    uint16_t extruder_temp_target;  // 0 = 0C, 5000 = 500C (max)
-    uint16_t bed_temp_target;
-    uint8_t  fan_speed;             // 0 = stop, 255 = full speed
+    // uint16_t extruder_temp_target;  // 0 = 0C, 5000 = 500C (max)
+    // uint16_t bed_temp_target;
+    // uint8_t  fan_speed;             // 0 = stop, 255 = full speed
 
 } PlannedMotion;
 
@@ -84,7 +84,7 @@ void evaluate_step_directions(PlannedMotion* motion, PointSteps* current_steps, 
 void compute_deltas_mm(float deltas_mm[], PointMM* target_mm, PointMM* current_mm);
 float compute_cartesian_length(float deltas_mm[]);
 void compute_path_and_vector_lengths(PlannedMotion*motion, float deltas_mm[]);
-void compute_master_axis_steps(PlannedMotion* motion, float deltas[]);
+void compute_master_axis_steps(PlannedMotion* motion);
 void compute_master_axis_steps_per_mm(PlannedMotion* motion);
 
 // ring buffer API

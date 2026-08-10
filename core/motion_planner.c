@@ -46,7 +46,7 @@ void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion) {
     compute_steps(motion, &target_steps, &current_steps);
 
     // find master axis steps
-    compute_master_axis_steps(motion, deltas_mm);
+    compute_master_axis_steps(motion);
 
     // compute step directions
     evaluate_step_directions(motion, &current_steps, &target_steps);
@@ -253,9 +253,54 @@ void recalculate_cruise_speed(RingBuffer* buffer) {
 
 
 /*
-
+    compute required parameters for the Step Generator
 */
 void finalize_motion_profiles(RingBuffer* buffer) {
+    // early exit
+    if (buffer->count < 2) {
+        return;
+    }
+
+    uint8_t curr_idx = buffer->tail;
+    while (curr_idx != buffer->head) {
+
+        // compute the electrical steps required in the acceleration, deceleration and cruise phase.
+        // compute_acceleration_steps();
+        uint32_t i = 0;
+
+        float v_entry = buffer->arr[i].v_entry;
+        float v_cruise = buffer->arr[i].v_cruise;
+        float v_exit = buffer->arr[i].v_exit;
+        float a = buffer->arr[i].max_path_acceleration;
+
+        float accel_dist = sqrtf((v_cruise * v_cruise - v_entry * v_entry) / (2.0f * a));
+        float decel_dist = sqrtf((v_cruise * v_cruise - v_exit * v_exit) / (2.0f * a));
+        float cruise_dist = buffer->arr[i].path_length_mm - decel_dist - accel_dist;
+
+        if (cruise_dist < 0.0001f) {
+            cruise_dist = 0.0f;
+        }
+        
+        buffer->arr[i].accel_steps = (uint32_t)lroundf(accel_dist * buffer->arr[i].master_steps_per_mm);
+        buffer->arr[i].decel_steps = (uint32_t)lroundf(decel_dist * buffer->arr[i].master_steps_per_mm);
+        buffer->arr[i].cruise_steps = (uint32_t)lroundf(cruise_dist * buffer->arr[i].master_steps_per_mm);
+        
+        curr_idx = (curr_idx + 1) % BUFFER_SIZE;
+    }
+}
+
+/*
+    extract metadata like fans speed, head and bed target temperature
+*/
+void extract_meta_data() {
+    
+}
+
+/*
+    dispatch a motion profile to the motion segments queue.
+    dispatch the metadata to the PID controller or UI Queue.
+*/
+void dispatch_data() {
 
 }
 
@@ -476,13 +521,17 @@ void compute_path_and_vector_lengths(PlannedMotion* motion, float deltas_mm[]) {
 /*
     finds the master axis and computes its electrical steps
 */
-void compute_master_axis_steps(PlannedMotion* motion, float deltas[]) {
+void compute_master_axis_steps(PlannedMotion* motion) {
     uint32_t master_steps = 0;
     uint8_t master_axis = 0;    // x - 0, y - 1, z - 2, e - 3; 
     
+    // steps per mm for each axis: x, y, z, e
+    float steps_per_mm[] = {STEPS_PER_MM_BELT, STEPS_PER_MM_BELT, STEPS_PER_MM_SCREW, STEPS_PER_MM_GEAR};
+    
     for (uint32_t i = 0; i < NUM_AXES; i++) {
-        if (fabsf(deltas[i]) > master_steps) {
-            master_steps = (uint32_t)lroundf(fabsf(deltas[i]));
+        uint32_t axis_steps = motion->steps[i];
+        if (axis_steps > master_steps) {
+            master_steps = axis_steps;
             master_axis = i;
         }
     }
@@ -492,15 +541,12 @@ void compute_master_axis_steps(PlannedMotion* motion, float deltas[]) {
 }
 
 /*
-    computes the velocity scale factor
+    computes the velocity scale factor based on master axis type
 */
 void compute_master_axis_steps_per_mm(PlannedMotion* motion) {
-    if (motion->path_length_mm > 0.0001f) {
-        motion->master_steps_per_mm = motion->master_steps / motion->path_length_mm;
-    }
-    else {
-        motion->master_steps_per_mm = 0.0f;
-    }
+    // steps per mm for each axis: x, y, z, e
+    float steps_per_mm[] = {STEPS_PER_MM_BELT, STEPS_PER_MM_BELT, STEPS_PER_MM_SCREW, STEPS_PER_MM_GEAR};
+    motion->master_steps_per_mm = steps_per_mm[motion->master_axis];
 }
 
 
