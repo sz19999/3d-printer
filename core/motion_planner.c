@@ -8,8 +8,98 @@
 #include <string.h> // for memset func
 
 /* 
+    checks if a G-code command is a motion command (G0, G1, G2, G3)
+*/
+bool is_motion_command(GCodeCommand* gcode_cmd) {
+    if (gcode_cmd->command_letter != 'G') return false;
+    
+    switch (gcode_cmd->command_number) {
+        case 0:   // G0 - Rapid positioning
+        case 1:   // G1 - Linear interpolation
+        case 2:   // G2 - Arc interpolation (CW)
+        case 3:   // G3 - Arc interpolation (CCW)
+            return true;
+        default:
+            return false;
+    }
+}
+
+/*
+    if command is of type 'G', process the command in the motion pipeline.
+    compute kinematic parameters, etc.
+*/
+void handle_motion_command(GCodeCommand* gcode_cmd) {
+    if (gcode_cmd->command_letter == 'G') {
+        switch (gcode_cmd->command_number) {
+            case 0:
+                // rapid move with no extrusion
+                break;
+            case 1:
+                // regular move with extrusion
+                break;
+            case 28:
+                // home axes
+                break;
+            case 90:
+                // absolute mode
+                break;
+            case 91:
+                // relative move
+                break;
+            case 92:
+                // set axes position
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+/* 
+    extracts thermal and auxiliary metadata from a G-code command and updates state
+    M104 S210 = set hotend temperature
+    M140 S60  = set bed temperature
+    M106 S200 = set fan speed (0-255)
+*/
+void extract_metadata(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
+    if (gcode_cmd->command_letter == 'M') {
+        switch (gcode_cmd->command_number) {
+            case 104:  // Set hotend temperature
+            case 109:  // Set hotend temperature and wait
+                if (gcode_cmd->has_S) {
+                    if (metadata->extruder_temp_target != gcode_cmd->S) {
+                        metadata->extruder_temp_target = gcode_cmd->S;
+                        metadata->temp_changed = true;
+                    }
+                }
+                break;
+            case 140:  // Set bed temperature
+            case 190:  // Set bed temperature and wait
+                if (gcode_cmd->has_S) {
+                    if (metadata->bed_temp_target != gcode_cmd->S) {
+                        metadata->bed_temp_target = gcode_cmd->S;
+                        metadata->temp_changed = true;
+                    }
+                }
+                break;
+            case 106:  // Set fan speed
+                if (gcode_cmd->has_S) {
+                    if (metadata->fan_speed != (uint8_t)gcode_cmd->S) {
+                        metadata->fan_speed = (uint8_t)gcode_cmd->S;
+                        metadata->fan_changed = true;
+                    }
+                }
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+/* 
     handles a single motion struct kinematics. 
     this function gets a raw gcode block and prepares an initial trapezoidal acceleration profile. 
+    only processes motion commands (G0, G1, G2, G3)
 */
 void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion) {
 
@@ -26,7 +116,7 @@ void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion) {
     // compute deltas in mm
     float deltas_mm[4];     // holds dx, dy, dz, de
     compute_deltas_mm(deltas_mm ,&target_mm, &current_mm);
-
+    
     // compute total vector length & path length
     compute_path_and_vector_lengths(motion, deltas_mm);
 
@@ -265,25 +355,22 @@ void finalize_motion_profiles(RingBuffer* buffer) {
     while (curr_idx != buffer->head) {
 
         // compute the electrical steps required in the acceleration, deceleration and cruise phase.
-        // compute_acceleration_steps();
-        uint32_t i = 0;
+        float v_entry = buffer->arr[curr_idx].v_entry;
+        float v_cruise = buffer->arr[curr_idx].v_cruise;
+        float v_exit = buffer->arr[curr_idx].v_exit;
+        float a = buffer->arr[curr_idx].max_path_acceleration;
 
-        float v_entry = buffer->arr[i].v_entry;
-        float v_cruise = buffer->arr[i].v_cruise;
-        float v_exit = buffer->arr[i].v_exit;
-        float a = buffer->arr[i].max_path_acceleration;
-
-        float accel_dist = sqrtf((v_cruise * v_cruise - v_entry * v_entry) / (2.0f * a));
-        float decel_dist = sqrtf((v_cruise * v_cruise - v_exit * v_exit) / (2.0f * a));
-        float cruise_dist = buffer->arr[i].path_length_mm - decel_dist - accel_dist;
+        float accel_dist = (v_cruise * v_cruise - v_entry * v_entry) / (2.0f * a);
+        float decel_dist = (v_cruise * v_cruise - v_exit * v_exit) / (2.0f * a);
+        float cruise_dist = buffer->arr[curr_idx].path_length_mm - decel_dist - accel_dist;
 
         if (cruise_dist < 0.0001f) {
             cruise_dist = 0.0f;
         }
         
-        buffer->arr[i].accel_steps = (uint32_t)lroundf(accel_dist * buffer->arr[i].master_steps_per_mm);
-        buffer->arr[i].decel_steps = (uint32_t)lroundf(decel_dist * buffer->arr[i].master_steps_per_mm);
-        buffer->arr[i].cruise_steps = (uint32_t)lroundf(cruise_dist * buffer->arr[i].master_steps_per_mm);
+        buffer->arr[curr_idx].accel_steps = (uint32_t)lroundf(accel_dist * buffer->arr[curr_idx].master_steps_per_mm);
+        buffer->arr[curr_idx].decel_steps = (uint32_t)lroundf(decel_dist * buffer->arr[curr_idx].master_steps_per_mm);
+        buffer->arr[curr_idx].cruise_steps = (uint32_t)lroundf(cruise_dist * buffer->arr[curr_idx].master_steps_per_mm);
         
         curr_idx = (curr_idx + 1) % BUFFER_SIZE;
     }
@@ -292,15 +379,15 @@ void finalize_motion_profiles(RingBuffer* buffer) {
 /*
     extract metadata like fans speed, head and bed target temperature
 */
-void extract_meta_data() {
-    
+void extract_and_dispatch_metadata() {
+
 }
 
 /*
     dispatch a motion profile to the motion segments queue.
     dispatch the metadata to the PID controller or UI Queue.
 */
-void dispatch_data() {
+void dispatch_motion() {
 
 }
 

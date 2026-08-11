@@ -38,12 +38,6 @@ typedef struct {
     uint32_t accel_steps;       // how much steps to accelerate
     uint32_t decel_steps;
     uint32_t cruise_steps;
-    //int32_t  accel_rate_factor; // how much consecutive pulses periods differ
-
-    // additional 
-    // uint16_t extruder_temp_target;  // 0 = 0C, 5000 = 500C (max)
-    // uint16_t bed_temp_target;
-    // uint8_t  fan_speed;             // 0 = stop, 255 = full speed
 
 } PlannedMotion;
 
@@ -64,7 +58,18 @@ typedef struct {
     uint8_t count;  // holds the number of occupied slots in the buffer
 } RingBuffer;
 
+// metadata for thermal and auxiliary control (separate from motion buffer)
+typedef struct {
+    uint16_t extruder_temp_target;  // 0 = disabled, else 0-500°C
+    uint16_t bed_temp_target;       // 0 = disabled, else 0-150°C
+    uint8_t  fan_speed;             // 0-255 PWM, 0 = off
+    bool     temp_changed;          // flag: temperature setpoint changed
+    bool     fan_changed;           // flag: fan speed changed
+} MotionMetadata;
+
 // main motion planner functions
+bool is_motion_command(GCodeCommand* gcode_cmd);
+void extract_metadata_from_gcode(GCodeCommand* gcode_cmd);
 void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion);
 void compute_junction_velocity(RingBuffer* buffer);
 void backward_pass(RingBuffer* buffer);
