@@ -34,7 +34,6 @@ int main() {
     RingBuffer buffer;
     init_buffer(&buffer);
 
-
     PlannedMotion motion;
     memset(&motion, 0, sizeof(PlannedMotion));  // init struct
     int j = 0;
