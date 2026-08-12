@@ -69,10 +69,10 @@ typedef struct {
 
 // main motion planner functions
 bool is_motion_command(GCodeCommand* gcode_cmd);
-void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*, PointSteps*);
+void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*, PointSteps*, bool*);
 void extract_metadata(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
 
-void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion, PointMM*, PointSteps*);
+void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion, PointMM*, PointSteps*, bool);
 void compute_junction_velocity(RingBuffer* buffer);
 void backward_pass(RingBuffer* buffer);
 void forward_pass(RingBuffer* buffer);
@@ -80,8 +80,8 @@ void recalculate_cruise_speed(RingBuffer* buffer);
 void finalize_motion_profiles(RingBuffer* buffer);
 
 // handle_motion_command() auxiliary functions
-void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*, PointSteps*);
-void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* current_steps);
+void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*, PointSteps*, bool);
+void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* current_steps, bool);
 
 // create_initial_profile() helper functions
 float limit_velocity(float v_target, float ux, float uy, float uz);
@@ -89,7 +89,7 @@ void compute_unit_vectors(PlannedMotion* motion, float deltas_mm[]);
 void compute_path_and_vector_lengths(PlannedMotion* motion, float deltas_mm[]);
 void compute_max_path_and_vector_acceleration(PlannedMotion* motion);
 void compute_profile_velocities(GCodeCommand* gcode_cmd, PlannedMotion* motion, float* v_target_mm_s);
-void update_target_coordinate(GCodeCommand* gcode_cmd, PointMM* target_mm);
+void update_target_coordinate(GCodeCommand* gcode_cmd, PointMM* target_mm, bool absolute_mode);
 void compute_steps(PlannedMotion* motion, PointSteps* target_steps, PointSteps* current_steps);
 void convert_from_mm_to_steps(PointSteps* target_steps, PointMM* target_mm);
 void evaluate_step_directions(PlannedMotion* motion, PointSteps* current_steps, PointSteps* target_steps);

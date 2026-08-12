@@ -30,18 +30,18 @@ bool is_motion_command(GCodeCommand* gcode_cmd) {
     if command is of type 'G', process the command in the motion pipeline.
     compute kinematic parameters, etc.
 */
-void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM* current_mm, PointSteps* current_steps) {
+void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM* current_mm, PointSteps* current_steps, bool* absolute_mode) {
     if (gcode_cmd->command_letter == 'G') {
         switch (gcode_cmd->command_number) {
             case 0:
                 // rapid move with no extrusion
             case 1:
                 // regular move with extrusion
-                plan_motion_segment(gcode_cmd, buffer, current_mm, current_steps);
+                plan_motion_segment(gcode_cmd, buffer, current_mm, current_steps, *absolute_mode);
                 break;
             case 92:
                 // update axes position variables
-                set_axes_pos(gcode_cmd, current_mm, current_steps);
+                set_axes_pos(gcode_cmd, current_mm, current_steps, *absolute_mode);
                 break;
             case 28:
                 // home axes
@@ -63,11 +63,11 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
     ***************************************
 */
 
-void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM* current_mm,PointSteps* current_steps) {
+void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM* current_mm,PointSteps* current_steps, bool absolute_mode) {
     PlannedMotion motion;
 
     // create base motion profile from command parameters
-    create_initial_profile(gcode_cmd, &motion, current_mm, current_steps);
+    create_initial_profile(gcode_cmd, &motion, current_mm, current_steps, absolute_mode);
 
     // append new segment to lookahead ring buffer
     append(buffer, &motion);
@@ -86,9 +86,9 @@ void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM* c
     finalize_motion_profiles(buffer);
 }
 
-void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* current_steps) {
-    update_target_coordinate(gcode_cmd, current_mm);
-    convert_from_mm_to_steps(current_mm, current_steps);
+void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* current_steps, bool absolute_mode) {
+    update_target_coordinate(gcode_cmd, current_mm, absolute_mode);
+    convert_from_mm_to_steps(current_steps, current_mm);
 }
 
 //void home_axes() {
@@ -143,14 +143,14 @@ void extract_metadata(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
     this function gets a raw gcode block and prepares an initial trapezoidal acceleration profile. 
     only processes motion commands (G0, G1, G2, G3)
 */
-void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion, PointMM* current_mm, PointSteps* current_steps) {
+void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion, PointMM* current_mm, PointSteps* current_steps, bool absolute_mode) {
 
     // initialize all PlannedMotion struct fields
     memset(motion, 0, sizeof(PlannedMotion));
     
     // update target coordinate in millimeters
     PointMM target_mm = *current_mm;
-    update_target_coordinate(gcode_cmd, &target_mm);
+    update_target_coordinate(gcode_cmd, &target_mm, absolute_mode);
 
     // compute deltas in mm
     float deltas_mm[4];     // holds dx, dy, dz, de
@@ -555,11 +555,11 @@ void compute_profile_velocities(GCodeCommand* gcode_cmd, PlannedMotion* motion, 
     motion->v_entry = motion->v_exit = 0.0f;                            // set default enter and exit speeds
 }
 
-void update_target_coordinate(GCodeCommand* gcode_cmd, PointMM* target_mm) {
-    if (gcode_cmd->has_X) target_mm->x = gcode_cmd->X;
-    if (gcode_cmd->has_Y) target_mm->y = gcode_cmd->Y;
-    if (gcode_cmd->has_Z) target_mm->z = gcode_cmd->Z;
-    if (gcode_cmd->has_E) target_mm->e = gcode_cmd->E;
+void update_target_coordinate(GCodeCommand* gcode_cmd, PointMM* target_mm, bool absolute_mode) {
+    if (gcode_cmd->has_X) target_mm->x = (absolute_mode) ? gcode_cmd->X : target_mm->x + gcode_cmd->X;
+    if (gcode_cmd->has_Y) target_mm->y = (absolute_mode) ? gcode_cmd->Y : target_mm->y + gcode_cmd->Y;
+    if (gcode_cmd->has_Z) target_mm->z = (absolute_mode) ? gcode_cmd->Z : target_mm->z + gcode_cmd->Z;
+    if (gcode_cmd->has_E) target_mm->e = (absolute_mode) ? gcode_cmd->E : target_mm->e + gcode_cmd->E;
 }
 
 void compute_steps(PlannedMotion* motion, PointSteps* target_steps, PointSteps* current_steps) {
