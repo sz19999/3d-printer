@@ -14,10 +14,12 @@ bool is_motion_command(GCodeCommand* gcode_cmd) {
     if (gcode_cmd->command_letter != 'G') return false;
     
     switch (gcode_cmd->command_number) {
-        case 0:   // G0 - Rapid positioning
-        case 1:   // G1 - Linear interpolation
-        case 2:   // G2 - Arc interpolation (CW)
-        case 3:   // G3 - Arc interpolation (CCW)
+        case 0:   // G0
+        case 1:   
+        case 28: 
+        case 90:  
+        case 91:  
+        case 92:
             return true;
         default:
             return false;
@@ -28,32 +30,63 @@ bool is_motion_command(GCodeCommand* gcode_cmd) {
     if command is of type 'G', process the command in the motion pipeline.
     compute kinematic parameters, etc.
 */
-void handle_motion_command(GCodeCommand* gcode_cmd) {
+void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer) {
     if (gcode_cmd->command_letter == 'G') {
         switch (gcode_cmd->command_number) {
             case 0:
                 // rapid move with no extrusion
-                break;
             case 1:
                 // regular move with extrusion
+            case 92:
+                // set axes position
+                plan_motion_segment(gcode_cmd, buffer);
                 break;
             case 28:
                 // home axes
-                break;
             case 90:
                 // absolute mode
                 break;
             case 91:
                 // relative move
                 break;
-            case 92:
-                // set axes position
-                break;
             default:
                 break;
         }
     }
 }
+
+/*
+    ***************************************
+    handle motion command auxiliary functions:
+    ***************************************
+*/
+
+void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer) {
+    PlannedMotion motion;
+
+    // 1. Create base motion profile from command parameters
+    create_initial_profile(gcode_cmd, &motion);
+
+    // 2. Append new segment to lookahead ring buffer
+    append(buffer, &motion);
+
+    // 3. Calculate maximum junction speed with previous block
+    compute_junction_velocity(buffer);
+
+    // 4. Lookahead planner passes (deceleration and acceleration constraints)
+    backward_pass(buffer);
+    forward_pass(buffer);
+
+    // 5. Finalize trapezoid parameters (acceleration, cruise, deceleration distance)
+    recalculate_cruise_speed(buffer);
+    finalize_motion_profiles(buffer);
+}
+
+//void home_axes() {
+///
+//}
+
+
 
 /* 
     extracts thermal and auxiliary metadata from a G-code command and updates state
@@ -376,20 +409,15 @@ void finalize_motion_profiles(RingBuffer* buffer) {
     }
 }
 
-/*
-    extract metadata like fans speed, head and bed target temperature
-*/
-void extract_and_dispatch_metadata() {
 
-}
 
 /*
     dispatch a motion profile to the motion segments queue.
     dispatch the metadata to the PID controller or UI Queue.
 */
-void dispatch_motion() {
-
-}
+//void dispatch_motion() {
+//
+//}
 
 
 

@@ -69,7 +69,9 @@ typedef struct {
 
 // main motion planner functions
 bool is_motion_command(GCodeCommand* gcode_cmd);
-void extract_metadata_from_gcode(GCodeCommand* gcode_cmd);
+void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer);
+void extract_metadata(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
+
 void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion);
 void compute_junction_velocity(RingBuffer* buffer);
 void backward_pass(RingBuffer* buffer);
@@ -77,7 +79,10 @@ void forward_pass(RingBuffer* buffer);
 void recalculate_cruise_speed(RingBuffer* buffer);
 void finalize_motion_profiles(RingBuffer* buffer);
 
-// helper functions
+// handle_motion_command() auxiliary functions
+void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer);
+
+// create_initial_profile() helper functions
 float limit_velocity(float v_target, float ux, float uy, float uz);
 void compute_unit_vectors(PlannedMotion* motion, float deltas_mm[]);
 void compute_path_and_vector_lengths(PlannedMotion* motion, float deltas_mm[]);
