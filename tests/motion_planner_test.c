@@ -34,13 +34,16 @@ int main() {
     RingBuffer buffer;
     init_buffer(&buffer);
 
+    PointMM current_mm = {0.0f, 0.0f, 0.0f, 0.0f};
+    PointSteps current_steps = {0, 0, 0, 0};
+    bool absolute_mode = true;
     PlannedMotion motion;
     memset(&motion, 0, sizeof(PlannedMotion));  // init struct
     int j = 0;
 
     while (j < CMDS_NUM) {
         // create initial profile and append to buffer
-        create_initial_profile(&gcode_queue[j], &motion);
+        create_initial_profile(&gcode_queue[j], &motion, &current_mm, &current_steps, absolute_mode);
         bool succeed = append(&buffer, &motion);
         if (!succeed) {
             printf("\nERROR: Failed to append a motion profile to the ring buffer!\n");
