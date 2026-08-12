@@ -8,6 +8,12 @@
 
 #define NUM_AXES    4   // X, Y, Z, E
 #define BUFFER_SIZE 16  // ring buffer size
+#define MIN_PLANNER_BLOCKS 3 // min amount of blocks to start dispatching from ring buffer
+
+typedef enum {
+    PLANNER_STATE_BUFFERING, // filling lookahead buffer; do not dispatch yet
+    PLANNER_STATE_RUNNING    // active execution; stream blocks to step generator
+} PlannerState;
 
 // motion block consumed by the Step Generator task
 typedef struct {

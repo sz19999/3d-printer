@@ -45,11 +45,16 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 break;
             case 28:
                 // home axes
+                // 1. execute G91 command
+                // 2. execute G0 cmd to move max axes distances
+                home_axes(current_mm, current_steps, absolute_mode);
             case 90:
                 // absolute mode
+                *absolute_mode = true;
                 break;
             case 91:
                 // relative move
+                *absolute_mode = false;
                 break;
             default:
                 break;
@@ -91,9 +96,36 @@ void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* curr
     convert_from_mm_to_steps(current_steps, current_mm);
 }
 
-//void home_axes() {
-///
-//}
+void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_steps, bool absolute_mode) {
+    GCodeCommand gcode_cmd;
+
+    char* relative_cmd = "G91";
+    char* absolute_cmd = "G92";
+    char move_cmd[128];
+    
+    // change to relative mode
+    parse_command(relative_cmd, &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+
+    // home X axis
+    sprintf(move_cmd, "G0 X-%d.0 F600", MAX_DISTANCE_X);
+    parse_command(move_cmd, &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+
+    // home Y axis
+    sprintf(move_cmd, "G0 Y-%d.0 F600", MAX_DISTANCE_Y);
+    parse_command(move_cmd, &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+
+    // home Z axis
+    sprintf(move_cmd, "G0 Z-%d.0 F100", MAX_DISTANCE_Z);
+    parse_command(move_cmd, &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+
+    // restore to absolute mode
+    parse_command(absolute_cmd, &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+}
 
 
 
