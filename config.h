@@ -25,4 +25,8 @@
 
 #define JUNCTION_DEVIATION  0.02f // 0.02mm - need to test
 
+#define MAX_DISTANCE_X 100.0f
+#define MAX_DISTANCE_Y 100.0f
+#define MAX_DISTANCE_Z 100.0f
+
 #endif
