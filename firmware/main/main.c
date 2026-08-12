@@ -1,97 +1,153 @@
 #include <stdio.h>
-#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/uart.h"
-#include "driver/gpio.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
 
-static const char *TAG = "UART_TEST";
+#include "gcode_parser.h"
+#include "motion_planner.h"
 
-// define LED pin
-#define LED_PIN (GPIO_NUM_4)
+#define GCODE_LINE_MAX_LEN 128
 
-// define UART parameters
-#define TXD_PIN (GPIO_NUM_17)
-#define RXD_PIN (GPIO_NUM_18)
-#define UART_PORT_NUM (UART_NUM_1)
-#define UART_BAUD_RATE (115200)
+static const char *TAG_PARSER  = "PARSER_TASK";
+static const char *TAG_PLANNER = "PLANNER_TASK";
+static const char *TAG_MAIN    = "MAIN_APP";
 
-// buffer size for incoming data
-#define RX_BUF_SIZE (1024)
+// Global handles for queues
+static QueueHandle_t gcode_line_queue = NULL;
+static QueueHandle_t gcode_cmds_queue = NULL;
+static QueueHandle_t motion_queue = NULL;
 
-void init_uart(void) 
-{
-    const uart_config_t uart_config = {
-        .baud_rate = UART_BAUD_RATE,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
 
-    // 1. Configure UART parameters
-    ESP_ERROR_CHECK(uart_param_config(UART_PORT_NUM, &uart_config));
+void parser_task(void *pvParameters) {
+    char gcode_line[GCODE_LINE_MAX_LEN];
+    GCodeCommand gcode_cmd;
 
-    // 2. Set UART pins (TX, RX, RTS, CTS)
-    ESP_ERROR_CHECK(uart_set_pin(UART_PORT_NUM, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-
-    // 3. Install UART driver using an internal Rx buffer (No Tx buffer, no event queue)
-    ESP_ERROR_CHECK(uart_driver_install(UART_PORT_NUM, RX_BUF_SIZE, 0, 0, NULL, 0));
-}
-
-#define MAX_RECV_LEN 64
-
-void app_main(void)
-{
-    init_uart();
-    ESP_LOGI(TAG, "UART1 Initialized. Starting byte-by-byte loopback test...");
-
-    // Send a newline-terminated string to make parsing easier
-    const char *tx_data = "Hello ESP-IDF\n"; 
-    char rx_buffer[MAX_RECV_LEN];
+    ESP_LOGI(TAG_PARSER, "Task started successfully on core %d", xPortGetCoreID());
 
     while (1) {
-        // 1. Transmit the data
-        ESP_LOGI(TAG, "[TX] Sending: %s", tx_data);
-        uart_write_bytes(UART_PORT_NUM, tx_data, strlen(tx_data));
+        // Wait indefinitely for raw gcode string lines
+        if (xQueueReceive(gcode_line_queue, gcode_line, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG_PARSER, "Received raw line: \"%s\"", gcode_line);
 
-        int bytes_read = 0;
-        char incoming_byte;
+            // Parse raw gcode line text buffer
+            if (!parse_command(gcode_line, &gcode_cmd)) {
+                ESP_LOGE(TAG_PARSER, "Failed to parse command: \"%s\"", gcode_line);
+                continue;
+            }
+
+            ESP_LOGI(TAG_PARSER, "Successfully parsed G-Code command type/code.");
+
+            // Dispatch into the parsed gcode queue
+            if (xQueueSend(gcode_cmds_queue, &gcode_cmd, pdMS_TO_TICKS(100)) == pdPASS) {
+                ESP_LOGI(TAG_PARSER, "Dispatched GCodeCommand to gcode_cmds_queue.");
+            } else {
+                ESP_LOGE(TAG_PARSER, "gcode_cmds_queue full! Command dropped.");
+            }
+        }
         
-        // 2. Read byte-by-byte
-        // We loop until we hit a newline, a timeout, or fill our stack buffer
-        while (bytes_read < (MAX_RECV_LEN - 1)) {
-            // Read exactly 1 byte. We give it a short 10ms timeout.
-            int res = uart_read_bytes(UART_PORT_NUM, &incoming_byte, 1, pdMS_TO_TICKS(10));
-            
-            if (res > 0) {
-                rx_buffer[bytes_read++] = incoming_byte;
-                if (incoming_byte == '\n') {
-                    break; // Stop reading; we hit the end of the message
+        vTaskDelay(pdMS_TO_TICKS(10)); // Brief delay for smooth serial observation
+    }
+}
+
+void motion_planner_task(void *pvParameters) {
+    GCodeCommand gcode_cmd;
+    MotionMetadata metadata;
+    PlannedMotion* motion = NULL;
+    RingBuffer buffer;
+
+    init_buffer(&buffer);
+    ESP_LOGI(TAG_PLANNER, "Task started successfully on core %d", xPortGetCoreID());
+    
+    while (1) {
+        if (xQueueReceive(gcode_cmds_queue, &gcode_cmd, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG_PLANNER, "Received parsed command from queue.");
+
+            if (is_motion_command(&gcode_cmd)) {
+                ESP_LOGI(TAG_PLANNER, "Command identified as MOTION. Planning velocity profile...");
+
+                handle_motion_command(&gcode_cmd, &buffer);
+                motion = front(&buffer);
+
+                // dispatch oldest motion to the step generator
+                if (motion != NULL) {
+                    ESP_LOGI(TAG_PLANNER, "Buffer front returned a motion block.");
+                    if (xQueueSend(motion_queue, motion, pdMS_TO_TICKS(100)) == pdPASS) {
+                        ESP_LOGI(TAG_PLANNER, "Dispatched PlannedMotion block to motion_queue.");
+                    } else {
+                        ESP_LOGE(TAG_PLANNER, "motion_queue full! Could not send motion block.");
+                    }
+                    pop(&buffer);
+                } else {
+                    ESP_LOGW(TAG_PLANNER, "Buffer front returned NULL after handling motion command.");
                 }
             } else {
-                // res == 0 means timeout (no more bytes currently available)
-                break; 
+                ESP_LOGI(TAG_PLANNER, "Command identified as NON-MOTION (Heater/Fan/State). Processing metadata...");
+                extract_metadata(&gcode_cmd, &metadata);
+                // System state handling logic goes here
             }
         }
 
-        // 3. Process the results
-        if (bytes_read > 0) {
-            rx_buffer[bytes_read] = '\0'; // Null-terminate the string safely
-            ESP_LOGI(TAG, "[RX] Received %d bytes: %s", bytes_read, rx_buffer);
-            
-            if (strcmp(tx_data, rx_buffer) == 0) {
-                ESP_LOGW(TAG, "Result: SUCCESS!");
-            } else {
-                ESP_LOGE(TAG, "Result: ERROR! Data mismatch.");
-            }
-        } else {
-            ESP_LOGE(TAG, "Result: ERROR! No bytes received. Check wire!");
-        }
-
-        ESP_LOGI(TAG, "--------------------------------------------------");
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
+}
+
+void app_main(void) {
+    ESP_LOGI(TAG_MAIN, "Initializing IPC queues...");
+
+    motion_queue     = xQueueCreate(10, sizeof(PlannedMotion));
+    gcode_cmds_queue = xQueueCreate(10, sizeof(GCodeCommand));
+    gcode_line_queue = xQueueCreate(10, GCODE_LINE_MAX_LEN);
+
+    if (!motion_queue || !gcode_cmds_queue || !gcode_line_queue) {
+        ESP_LOGE(TAG_MAIN, "Failed to allocate FreeRTOS Queues!");
+        return;
+    }
+
+    // Pre-fill line queue with test G-code strings
+    const char *gcode_commands[10] = {
+        "G28 ; Home all axes",
+        "G90 ; Set positioning to absolute",
+        "M104 S200 ; Set extruder temperature to 200C",
+        "M140 S60 ; Set bed temperature to 60C",
+        "M109 S200 ; Wait for extruder temperature",
+        "M190 S60 ; Wait for bed temperature",
+        "G1 Z0.2 F1200 ; Move nozzle to initial layer height",
+        "G1 X10 Y10 E1.0 F1500 ; Extrude a small line segment",
+        "G1 X50 Y10 E3.5 F1500 ; Continue printing motion path",
+        "M107 ; Turn off fan"
+    };
+
+    ESP_LOGI(TAG_MAIN, "Pre-filling gcode_line_queue with 10 test strings...");
+    for (int i = 0; i < 10; i++) {
+        if (xQueueSend(gcode_line_queue, gcode_commands[i], pdMS_TO_TICKS(100)) == pdPASS) {
+            ESP_LOGI(TAG_MAIN, "Pushed string [%d/10] into line queue.", i + 1);
+        } else {
+            ESP_LOGE(TAG_MAIN, "Line queue full when pushing string index %d", i);
+        }
+    }
+
+    ESP_LOGI(TAG_MAIN, "Spawning FreeRTOS tasks...");
+
+    xTaskCreatePinnedToCore(
+        parser_task,
+        "Parser_Task",
+        4096,
+        NULL,
+        2,
+        NULL,
+        0
+    );
+
+    xTaskCreatePinnedToCore(
+        motion_planner_task,
+        "Planner_Task",
+        4096,
+        NULL,
+        2,
+        NULL,
+        0
+    );
+
+    ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");
 }
