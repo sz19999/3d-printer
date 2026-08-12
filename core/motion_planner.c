@@ -41,7 +41,7 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 break;
             case 92:
                 // update axes position variables
-                set_axes_pos(gcode_cmd, current_mm, current_steps);
+                set_axes_pos();
                 break;
             case 28:
                 // home axes
@@ -84,11 +84,6 @@ void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer) {
 
     // finalize trapezoid parameters
     finalize_motion_profiles(buffer);
-}
-
-void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* current_steps) {
-    update_target_coordinate(gcode_cmd, current_mm);
-    convert_from_mm_to_steps(current_mm, current_steps);
 }
 
 //void home_axes() {

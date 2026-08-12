@@ -81,7 +81,6 @@ void finalize_motion_profiles(RingBuffer* buffer);
 
 // handle_motion_command() auxiliary functions
 void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer);
-void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* current_steps);
 
 // create_initial_profile() helper functions
 float limit_velocity(float v_target, float ux, float uy, float uz);
