@@ -12,12 +12,14 @@
 static const char *TAG_PARSER  = "PARSER_TASK";
 static const char *TAG_PLANNER = "PLANNER_TASK";
 static const char *TAG_MAIN    = "MAIN_APP";
+static const char *TAG_MOTION = "MOTION_BLOCK";
 
 // Global handles for queues
 static QueueHandle_t gcode_line_queue = NULL;
 static QueueHandle_t gcode_cmds_queue = NULL;
 static QueueHandle_t motion_queue = NULL;
 
+void print_motion_block(const PlannedMotion* block);
 
 void parser_task(void *pvParameters) {
     char gcode_line[GCODE_LINE_MAX_LEN];
@@ -59,29 +61,22 @@ void motion_planner_task(void *pvParameters) {
     PointMM current_mm = {0.0f, 0.0f, 0.0f, 0.0f};
     PointSteps current_steps = {0, 0, 0, 0};
     bool absolute_mode = true;
+    PlannerState planner_state = PLANNER_STATE_BUFFERING;
 
     init_buffer(&buffer);
     ESP_LOGI(TAG_PLANNER, "Task started successfully on core %d", xPortGetCoreID());
     
     while (1) {
-        if (xQueueReceive(gcode_cmds_queue, &gcode_cmd, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(gcode_cmds_queue, &gcode_cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
             ESP_LOGI(TAG_PLANNER, "Received parsed command from queue.");
 
             if (is_motion_command(&gcode_cmd)) {
                 ESP_LOGI(TAG_PLANNER, "Command identified as MOTION. Planning velocity profile...");
 
                 handle_motion_command(&gcode_cmd, &buffer, &current_mm, &current_steps, &absolute_mode);
-                motion = front(&buffer);
 
-                // dispatch oldest motion to the step generator
-                if (motion != NULL) {
-                    ESP_LOGI(TAG_PLANNER, "Buffer front returned a motion block.");
-                    if (xQueueSend(motion_queue, motion, pdMS_TO_TICKS(100)) == pdPASS) {
-                        ESP_LOGI(TAG_PLANNER, "Dispatched PlannedMotion block to motion_queue.");
-                    } else {
-                        ESP_LOGE(TAG_PLANNER, "motion_queue full! Could not send motion block.");
-                    }
-                    pop(&buffer);
+                if (buffer.count >= MIN_PLANNER_BLOCKS) {
+                    planner_state = PLANNER_STATE_RUNNING;
                 } else {
                     ESP_LOGW(TAG_PLANNER, "Buffer front returned NULL after handling motion command.");
                 }
@@ -91,6 +86,29 @@ void motion_planner_task(void *pvParameters) {
                 // System state handling logic goes here
             }
         }
+
+        if (planner_state == PLANNER_STATE_RUNNING) {
+            // dispatch oldest motion to the step generator
+
+            motion = front(&buffer);
+            if (motion != NULL) {
+                
+                if (xQueueSend(motion_queue, motion, pdMS_TO_TICKS(100)) == pdPASS) {
+                    ESP_LOGI(TAG_PLANNER, "Buffer front returned a motion block.");
+                    print_motion_block(motion);
+
+                    ESP_LOGI(TAG_PLANNER, "Dispatched PlannedMotion block to motion_queue.");
+                    pop(&buffer);
+                } else {
+                    ESP_LOGE(TAG_PLANNER, "motion_queue full! Could not send motion block.");
+                }
+
+            }
+        }
+
+        if (is_empty(&buffer)) {
+            planner_state = PLANNER_STATE_BUFFERING;
+        } 
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -138,9 +156,9 @@ void app_main(void) {
         "Parser_Task",
         4096,
         NULL,
-        2,
+        2,  // priority
         NULL,
-        0
+        0   // core 0
     );
 
     xTaskCreatePinnedToCore(
@@ -154,4 +172,36 @@ void app_main(void) {
     );
 
     ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");
+}
+
+void print_motion_block(const PlannedMotion* block) {
+    if (block == NULL) {
+        ESP_LOGE(TAG_MOTION, "Cannot print NULL motion block.");
+        return;
+    }
+
+    ESP_LOGI(TAG_MOTION, "=== Planned Motion Block Details ===");
+
+    // Geometry & Distances
+    ESP_LOGI(TAG_MOTION, "Path Length: %.2f mm | Total Vector Len: %.2f",
+             block->path_length_mm, block->total_vector_length);
+    ESP_LOGI(TAG_MOTION, "Unit Vector (X,Y,Z,E): (%.2f, %.2f, %.2f, %.2f)", 
+             block->unit_vec[0], block->unit_vec[1], block->unit_vec[2], block->unit_vec[3]);
+
+    // Velocities & Accelerations
+    ESP_LOGI(TAG_MOTION, "Velocities - Entry: %.2f | Cruise: %.2f | Exit: %.2f", 
+             block->v_entry, block->v_cruise, block->v_exit);
+    ESP_LOGI(TAG_MOTION, "Max Accel - Path: %.2f | Vector: %.2f", 
+             block->max_path_acceleration, block->max_vector_acceleration);
+
+    // Axis Mapping & Steps
+    ESP_LOGI(TAG_MOTION, "Master Axis: %d | Master Steps: %d  | Master Steps/mm: %.2f", 
+             block->master_axis, block->master_steps, block->master_steps_per_mm);
+    ESP_LOGI(TAG_MOTION, "Dir Bits: 0x%02X", block->dir_bits);
+    ESP_LOGI(TAG_MOTION, "Axis Steps (X,Y,Z,E): (%d, %d, %d, %d)", block->steps[0], block->steps[1], 
+            block->steps[2], block->steps[3]);
+
+    // Trapezoidal Phase Step Counts
+    ESP_LOGI(TAG_MOTION, "Phases - Accel Steps: %d | Cruise Steps: %d | Decel Steps: %d", 
+            block->accel_steps, block->cruise_steps, block->decel_steps);
 }
