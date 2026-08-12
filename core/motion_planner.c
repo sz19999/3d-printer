@@ -45,8 +45,6 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 break;
             case 28:
                 // home axes
-                // 1. execute G91 command
-                // 2. execute G0 cmd to move max axes distances
                 home_axes(current_mm, current_steps, absolute_mode);
             case 90:
                 // absolute mode
@@ -127,7 +125,11 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
 }
 
-
+/*
+    ***************************************
+    end of handle motion command auxiliary functions
+    ***************************************
+*/
 
 /* 
     extracts thermal and auxiliary metadata from a G-code command and updates state
@@ -135,40 +137,65 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     M140 S60  = set bed temperature
     M106 S200 = set fan speed (0-255)
 */
-void extract_metadata(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
+void handle_metadata_command(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
     if (gcode_cmd->command_letter == 'M') {
         switch (gcode_cmd->command_number) {
             case 104:  // Set hotend temperature
             case 109:  // Set hotend temperature and wait
-                if (gcode_cmd->has_S) {
-                    if (metadata->extruder_temp_target != gcode_cmd->S) {
-                        metadata->extruder_temp_target = gcode_cmd->S;
-                        metadata->temp_changed = true;
-                    }
-                }
+                set_hotend_temp(gcode_cmd, metadata);
                 break;
             case 140:  // Set bed temperature
             case 190:  // Set bed temperature and wait
-                if (gcode_cmd->has_S) {
-                    if (metadata->bed_temp_target != gcode_cmd->S) {
-                        metadata->bed_temp_target = gcode_cmd->S;
-                        metadata->temp_changed = true;
-                    }
-                }
+                set_bed_temp(gcode_cmd, metadata);
                 break;
             case 106:  // Set fan speed
-                if (gcode_cmd->has_S) {
-                    if (metadata->fan_speed != (uint8_t)gcode_cmd->S) {
-                        metadata->fan_speed = (uint8_t)gcode_cmd->S;
-                        metadata->fan_changed = true;
-                    }
-                }
+            case 107:  // turn off fan
+                set_fan_speed(gcode_cmd, metadata);
                 break;
             default:
                 break;
         }
     }
 }
+
+/*
+    ***************************************
+    handle metadata command auxiliary functions:
+    ***************************************
+*/
+
+void set_hotend_temp(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
+    if (gcode_cmd->has_S) {
+        if (metadata->extruder_temp_target != gcode_cmd->S) {
+            metadata->extruder_temp_target = gcode_cmd->S;
+            metadata->temp_changed = true;
+        }
+    }
+}
+
+void set_bed_temp(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
+    if (gcode_cmd->has_S) {
+        if (metadata->bed_temp_target != gcode_cmd->S) {
+            metadata->bed_temp_target = gcode_cmd->S;
+            metadata->temp_changed = true;
+        }
+    }
+}
+
+void set_fan_speed(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
+    if (gcode_cmd->has_S) {
+        if (metadata->fan_speed != (uint8_t)gcode_cmd->S) {
+            metadata->fan_speed = (uint8_t)gcode_cmd->S;
+            metadata->fan_changed = true;
+        }
+    }
+}
+
+/*
+    ***************************************
+    end of handle metadata command auxiliary functions
+    ***************************************
+*/
 
 /* 
     handles a single motion struct kinematics. 

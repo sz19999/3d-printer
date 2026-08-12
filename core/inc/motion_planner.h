@@ -76,7 +76,7 @@ typedef struct {
 // main motion planner functions
 bool is_motion_command(GCodeCommand* gcode_cmd);
 void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*, PointSteps*, bool*);
-void extract_metadata(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
+void handle_metadata_command(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
 
 void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion, PointMM*, PointSteps*, bool);
 void compute_junction_velocity(RingBuffer* buffer);

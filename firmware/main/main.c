@@ -19,6 +19,9 @@ static QueueHandle_t gcode_line_queue = NULL;
 static QueueHandle_t gcode_cmds_queue = NULL;
 static QueueHandle_t motion_queue = NULL;
 
+// shared between motion planner and PID controller
+MotionMetadata metadata;
+
 void print_motion_block(const PlannedMotion* block);
 
 void parser_task(void *pvParameters) {
@@ -54,7 +57,6 @@ void parser_task(void *pvParameters) {
 
 void motion_planner_task(void *pvParameters) {
     GCodeCommand gcode_cmd;
-    MotionMetadata metadata;
     PlannedMotion* motion = NULL;
     RingBuffer buffer;
 
@@ -82,8 +84,8 @@ void motion_planner_task(void *pvParameters) {
                 }
             } else {
                 ESP_LOGI(TAG_PLANNER, "Command identified as NON-MOTION (Heater/Fan/State). Processing metadata...");
-                extract_metadata(&gcode_cmd, &metadata);
-                // System state handling logic goes here
+                handle_metadata_command(&gcode_cmd, &metadata);
+                // TODO: dispatch printing status to OLED Task
             }
         }
 
