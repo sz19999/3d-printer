@@ -30,16 +30,18 @@ bool is_motion_command(GCodeCommand* gcode_cmd) {
     if command is of type 'G', process the command in the motion pipeline.
     compute kinematic parameters, etc.
 */
-void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer) {
+void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM* current_mm, PointSteps* current_steps) {
     if (gcode_cmd->command_letter == 'G') {
         switch (gcode_cmd->command_number) {
             case 0:
                 // rapid move with no extrusion
             case 1:
                 // regular move with extrusion
-            case 92:
-                // set axes position
                 plan_motion_segment(gcode_cmd, buffer);
+                break;
+            case 92:
+                // update axes position variables
+                set_axes_pos();
                 break;
             case 28:
                 // home axes
@@ -64,21 +66,23 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer) {
 void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer) {
     PlannedMotion motion;
 
-    // 1. Create base motion profile from command parameters
+    // create base motion profile from command parameters
     create_initial_profile(gcode_cmd, &motion);
 
-    // 2. Append new segment to lookahead ring buffer
+    // append new segment to lookahead ring buffer
     append(buffer, &motion);
 
-    // 3. Calculate maximum junction speed with previous block
+    // calculate maximum junction speed with previous block
     compute_junction_velocity(buffer);
 
-    // 4. Lookahead planner passes (deceleration and acceleration constraints)
+    // lookahead planner passes (deceleration and acceleration constraints)
     backward_pass(buffer);
     forward_pass(buffer);
 
-    // 5. Finalize trapezoid parameters (acceleration, cruise, deceleration distance)
+    // recalculate cruise to a feasible one if needed
     recalculate_cruise_speed(buffer);
+
+    // finalize trapezoid parameters
     finalize_motion_profiles(buffer);
 }
 
@@ -134,21 +138,18 @@ void extract_metadata(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
     this function gets a raw gcode block and prepares an initial trapezoidal acceleration profile. 
     only processes motion commands (G0, G1, G2, G3)
 */
-void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion) {
+void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion, PointMM* current_mm, PointSteps* current_steps) {
 
     // initialize all PlannedMotion struct fields
     memset(motion, 0, sizeof(PlannedMotion));
-
-    static PointMM current_mm = {0.0f, 0.0f, 0.0f, 0.0f};
-    static PointSteps current_steps = {0, 0, 0, 0};
     
     // update target coordinate in millimeters
-    PointMM target_mm = current_mm;
+    PointMM target_mm = *current_mm;
     update_target_coordinate(gcode_cmd, &target_mm);
 
     // compute deltas in mm
     float deltas_mm[4];     // holds dx, dy, dz, de
-    compute_deltas_mm(deltas_mm ,&target_mm, &current_mm);
+    compute_deltas_mm(deltas_mm ,&target_mm, current_mm);
     
     // compute total vector length & path length
     compute_path_and_vector_lengths(motion, deltas_mm);
@@ -166,20 +167,20 @@ void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion) {
     // convert & compute absolute integer step targets
     PointSteps target_steps;
     convert_from_mm_to_steps(&target_steps, &target_mm);
-    compute_steps(motion, &target_steps, &current_steps);
+    compute_steps(motion, &target_steps, current_steps);
 
     // find master axis steps
     compute_master_axis_steps(motion);
 
     // compute step directions
-    evaluate_step_directions(motion, &current_steps, &target_steps);
+    evaluate_step_directions(motion, current_steps, &target_steps);
 
     // compute master axis steps per mm
     compute_master_axis_steps_per_mm(motion);
 
     // advance position tracking for next call
-    current_mm = target_mm;
-    current_steps = target_steps;
+    *current_mm = target_mm;
+    *current_steps = target_steps;
 }
 
 

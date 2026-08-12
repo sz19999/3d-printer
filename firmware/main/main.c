@@ -55,6 +55,8 @@ void motion_planner_task(void *pvParameters) {
     MotionMetadata metadata;
     PlannedMotion* motion = NULL;
     RingBuffer buffer;
+    PointMM current_mm = {0.0f, 0.0f, 0.0f, 0.0f};
+    PointSteps current_steps = {0, 0, 0, 0};
 
     init_buffer(&buffer);
     ESP_LOGI(TAG_PLANNER, "Task started successfully on core %d", xPortGetCoreID());
@@ -66,7 +68,7 @@ void motion_planner_task(void *pvParameters) {
             if (is_motion_command(&gcode_cmd)) {
                 ESP_LOGI(TAG_PLANNER, "Command identified as MOTION. Planning velocity profile...");
 
-                handle_motion_command(&gcode_cmd, &buffer);
+                handle_motion_command(&gcode_cmd, &buffer, &current_mm, &current_steps);
                 motion = front(&buffer);
 
                 // dispatch oldest motion to the step generator
