@@ -2,7 +2,17 @@
 # ESP-IDF builds
 firmware/build/
 firmware/sdkconfig.old
+firmware/sdkconfig
 firmware/dependencies.lock
+firmware/.vscode
+firmware/.clangd
+firmware/tests/build/
+
+firmware/tests/build/sdkconfig.old
+firmware/tests/.vscode
+firmware/tests/.clangd
+firmware/tests/sdkconfig
+firmware/tests/sdkconfig.old
 
 # host-side files, builds, etc.
 tests/build/
