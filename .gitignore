@@ -5,11 +5,13 @@ firmware/sdkconfig.old
 firmware/sdkconfig
 firmware/dependencies.lock
 firmware/.vscode/
+firmware/.vscode/settings.json
 firmware/.clangd
 firmware/tests/build/
 
 firmware/tests/build/sdkconfig.old
 firmware/tests/.vscode/
+firmware/tests/.vscode/settings.json
 firmware/tests/.clangd
 firmware/tests/sdkconfig
 firmware/tests/sdkconfig.old
