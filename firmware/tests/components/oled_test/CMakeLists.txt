@@ -3,5 +3,5 @@ idf_component_register(
         "oled_test.c"
     INCLUDE_DIRS 
         "inc"
-    REQUIRES log driver
+    REQUIRES log driver i2c_oled
 )
