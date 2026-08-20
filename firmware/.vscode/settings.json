@@ -1,9 +1,9 @@
 {
   "idf.currentSetup": "C:\\Users\\seanz\\esp\\v5.5\\esp-idf",
   "idf.flashType": "UART",
-  "idf.portWin": "COM3",
+  "idf.portWin": "COM5",
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32"
+    "IDF_TARGET": "esp32s3"
   },
   "clangd.path": "C:\\Users\\seanz\\.espressif\\tools\\esp-clang\\esp-19.1.2_20250312\\esp-clang\\bin\\clangd.exe",
   "clangd.arguments": [
