@@ -1,6 +1,7 @@
 #include "config.h"
 #include "motion_planner.h"
 #include "gcode_parser.h"
+#include "esp_log.h"
 
 #include <stdio.h>
 #include <math.h>
@@ -45,7 +46,8 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 break;
             case 28:
                 // home axes
-                home_axes(current_mm, current_steps, absolute_mode);
+                home_axes(buffer, current_mm, current_steps, absolute_mode);
+                break;
             case 90:
                 // absolute mode
                 *absolute_mode = true;
@@ -104,25 +106,31 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     // change to relative mode
     parse_command(relative_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", relative_cmd);
 
     // home X axis
     sprintf(move_cmd, "G0 X-%.2f F600", MAX_DISTANCE_X);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
     // home Y axis
     sprintf(move_cmd, "G0 Y-%.2f F600", MAX_DISTANCE_Y);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
     // home Z axis
     sprintf(move_cmd, "G0 Z-%.2f F100", MAX_DISTANCE_Z);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
     // restore to absolute mode
     parse_command(absolute_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", absolute_cmd);
 }
 
 /*
