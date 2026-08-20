@@ -1,15 +1,18 @@
-#include "spi_sd.h"
+#include <errno.h>
+#include <dirent.h>
 #include <stdbool.h>
 #include <string.h>
+#include <ctype.h>
+
+#include "spi_sd.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
-#include <errno.h>
-#include <dirent.h>
 
 static const char *TAG = "SD_CARD_TEST";
+static const char *TAG_F = "FILE_SEARCH";
 
 void sd_init(sdmmc_card_t** card, sdmmc_host_t* host) {
     esp_err_t ret;
@@ -77,4 +80,68 @@ void sd_read_line(FILE* f) {
             ESP_LOGE(TAG, "Failed to read data from file");
         }
     }
+}
+
+
+// check if a filename ends with a given extension
+bool has_extension(const char *filename, const char *ext) {
+    size_t filename_len = strlen(filename);
+    size_t ext_len = strlen(ext);
+
+    if (filename_len < ext_len) {
+        return false;
+    }
+
+    const char *str1 = filename + (filename_len - ext_len);
+    const char *str2 = ext;
+
+    while (*str1 != '\0' && *str2 != '\0') {
+        if (tolower((unsigned char)*str1) != tolower((unsigned char)*str2)) {
+            return false;
+        }
+        str1++;
+        str2++;
+    }
+
+    return true;
+}
+
+// Searches directory for the first file matching target_ext and opens it
+FILE* open_first_by_extension(const char *search_dir, const char *target_ext, const char *mode) {
+    DIR *dir = opendir(search_dir);
+    if (!dir) {
+        ESP_LOGE(TAG_F, "Failed to open directory: %s", search_dir);
+        return NULL;
+    }
+
+    struct dirent *entry;
+    char full_path[512];
+    bool found = false;
+
+    while ((entry = readdir(dir)) != NULL) {
+        ESP_LOGI(TAG_F, "Raw directory entry: '%s' (len: %d)", entry->d_name, strlen(entry->d_name));
+
+        // skip directories or hidden files
+        if (entry->d_type == DT_DIR) continue;
+
+        if (has_extension(entry->d_name, target_ext)) {
+            snprintf(full_path, sizeof(full_path), "%s/%s", search_dir, entry->d_name);
+            ESP_LOGI(TAG_F, "Found matching file: %s", entry->d_name);
+            found = true;
+            break; // stop at the first matching file
+        }
+    }
+
+    closedir(dir);
+
+    if (found) {
+        FILE *file = fopen(full_path, mode);
+        if (!file) {
+            ESP_LOGE(TAG_F, "Failed to open file: %s", full_path);
+        }
+        return file;
+    }
+
+    ESP_LOGW(TAG_F, "No file with extension '%s' found in %s", target_ext, search_dir);
+    return NULL;
 }

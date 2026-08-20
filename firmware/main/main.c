@@ -1,4 +1,7 @@
 #include <stdio.h>
+#include <dirent.h>
+#include <string.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -6,13 +9,15 @@
 
 #include "gcode_parser.h"
 #include "motion_planner.h"
+#include "spi_sd.h"
 
 #define GCODE_LINE_MAX_LEN 128
 
 static const char *TAG_PARSER  = "PARSER_TASK";
 static const char *TAG_PLANNER = "PLANNER_TASK";
 static const char *TAG_MAIN    = "MAIN_APP";
-static const char *TAG_MOTION = "MOTION_BLOCK";
+static const char *TAG_MOTION  = "MOTION_BLOCK";
+static const char *TAG_SD      = "SD_STREAMER_TASK";
 
 // Global handles for queues
 static QueueHandle_t gcode_line_queue = NULL;
@@ -23,6 +28,46 @@ static QueueHandle_t motion_queue = NULL;
 MotionMetadata metadata;
 
 void print_motion_block(const PlannedMotion* block);
+
+void sd_streamer_task(void *pvParameters) {
+    ESP_LOGI(TAG_SD, "Task started successfully on core %d", xPortGetCoreID());
+
+    // init & mount sd card
+    sdmmc_card_t* card = NULL;
+    sdmmc_host_t host  = SDSPI_HOST_DEFAULT();
+    sd_init(&card, &host);
+
+    // find the first gcode file in the sd card
+    FILE* f = open_first_by_extension(MOUNT_POINT, ".gcode", "rb");
+    if (f == NULL) {
+        ESP_LOGE(TAG_SD, "Couldn't open gcode file!");
+    }
+    else {
+        ESP_LOGI(TAG_SD, "Opened gcode file scuccessfuly!");
+        
+        while(1) {
+            char gcode_line[GCODE_LINE_MAX_LEN];
+
+            // read gcode line
+            if (fgets(gcode_line, sizeof(gcode_line), f) == NULL) {
+                ESP_LOGI(TAG_SD, "Reached to the end of the gcode file!");
+                fclose(f);
+                break;
+            }
+
+            // dispatch gcode line
+            if (xQueueSend(gcode_line_queue, gcode_line, portMAX_DELAY) == pdPASS) { // Wait indefinitely if queue is full
+                ESP_LOGI(TAG_SD, "Dispatched gcode line to gcode_line_queue.");
+            } else {
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(1000)); // Brief delay for smooth serial observation
+        }
+
+        // teardown & clean unmount
+        esp_vfs_fat_sdcard_unmount(MOUNT_POINT, card);
+    }
+}
 
 void parser_task(void *pvParameters) {
     char gcode_line[GCODE_LINE_MAX_LEN];
@@ -38,10 +83,13 @@ void parser_task(void *pvParameters) {
             // Parse raw gcode line text buffer
             if (!parse_command(gcode_line, &gcode_cmd)) {
                 ESP_LOGE(TAG_PARSER, "Failed to parse command: \"%s\"", gcode_line);
-                continue;
+                continue;   // dont dispatch invalid commands
             }
 
-            ESP_LOGI(TAG_PARSER, "Successfully parsed G-Code command type/code.");
+            // dont dispatch pure comments
+            if (gcode_line[0] == ';') continue;
+
+            ESP_LOGI(TAG_PARSER, "Successfully parsed G-Code command: \"%s\".", gcode_line);
 
             // Dispatch into the parsed gcode queue
             if (xQueueSend(gcode_cmds_queue, &gcode_cmd, pdMS_TO_TICKS(100)) == pdPASS) {
@@ -51,7 +99,7 @@ void parser_task(void *pvParameters) {
             }
         }
         
-        vTaskDelay(pdMS_TO_TICKS(10)); // Brief delay for smooth serial observation
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Brief delay for smooth serial observation
     }
 }
 
@@ -112,7 +160,7 @@ void motion_planner_task(void *pvParameters) {
             planner_state = PLANNER_STATE_BUFFERING;
         } 
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -129,27 +177,27 @@ void app_main(void) {
     }
 
     // Pre-fill line queue with test G-code strings
-    const char *gcode_commands[10] = {
-        "G28 ; Home all axes",
-        "G90 ; Set positioning to absolute",
-        "M104 S200 ; Set extruder temperature to 200C",
-        "M140 S60 ; Set bed temperature to 60C",
-        "M109 S200 ; Wait for extruder temperature",
-        "M190 S60 ; Wait for bed temperature",
-        "G1 Z0.2 F1200 ; Move nozzle to initial layer height",
-        "G1 X10 Y10 E1.0 F1500 ; Extrude a small line segment",
-        "G1 X50 Y10 E3.5 F1500 ; Continue printing motion path",
-        "M107 ; Turn off fan"
-    };
+    // const char *gcode_commands[10] = {
+    //     "G28 ; Home all axes",
+    //     "G90 ; Set positioning to absolute",
+    //     "M104 S200 ; Set extruder temperature to 200C",
+    //     "M140 S60 ; Set bed temperature to 60C",
+    //     "M109 S200 ; Wait for extruder temperature",
+    //     "M190 S60 ; Wait for bed temperature",
+    //     "G1 Z0.2 F1200 ; Move nozzle to initial layer height",
+    //     "G1 X10 Y10 E1.0 F1500 ; Extrude a small line segment",
+    //     "G1 X50 Y10 E3.5 F1500 ; Continue printing motion path",
+    //     "M107 ; Turn off fan"
+    // };
 
-    ESP_LOGI(TAG_MAIN, "Pre-filling gcode_line_queue with 10 test strings...");
-    for (int i = 0; i < 10; i++) {
-        if (xQueueSend(gcode_line_queue, gcode_commands[i], pdMS_TO_TICKS(100)) == pdPASS) {
-            ESP_LOGI(TAG_MAIN, "Pushed string [%d/10] into line queue.", i + 1);
-        } else {
-            ESP_LOGE(TAG_MAIN, "Line queue full when pushing string index %d", i);
-        }
-    }
+    // ESP_LOGI(TAG_MAIN, "Pre-filling gcode_line_queue with 10 test strings...");
+    // for (int i = 0; i < 10; i++) {
+    //     if (xQueueSend(gcode_line_queue, gcode_commands[i], pdMS_TO_TICKS(100)) == pdPASS) {
+    //         ESP_LOGI(TAG_MAIN, "Pushed string [%d/10] into line queue.", i + 1);
+    //     } else {
+    //         ESP_LOGE(TAG_MAIN, "Line queue full when pushing string index %d", i);
+    //     }
+    // }
 
     ESP_LOGI(TAG_MAIN, "Spawning FreeRTOS tasks...");
 
@@ -166,6 +214,16 @@ void app_main(void) {
     xTaskCreatePinnedToCore(
         motion_planner_task,
         "Planner_Task",
+        4096,
+        NULL,
+        2,
+        NULL,
+        0
+    );
+
+    xTaskCreatePinnedToCore(
+        sd_streamer_task,
+        "SD_Streamer_Task",
         4096,
         NULL,
         2,

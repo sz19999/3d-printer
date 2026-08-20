@@ -9,5 +9,5 @@ idf_component_register(
         "../../core"
         "../../core/inc"
         "../.."
-    REQUIRES log
+    REQUIRES log spi_sd i2c_oled
 )

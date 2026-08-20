@@ -14,5 +14,7 @@
 
 void sd_init(sdmmc_card_t** card, sdmmc_host_t* host);
 void sd_read_line(FILE* f);
+FILE* open_first_by_extension(const char *search_dir, const char *target_ext, const char *mode);
+bool has_extension(const char *filename, const char *ext);
 
 #endif
