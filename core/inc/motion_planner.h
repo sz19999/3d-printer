@@ -88,6 +88,12 @@ void finalize_motion_profiles(RingBuffer* buffer);
 // handle_motion_command() auxiliary functions
 void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*, PointSteps*, bool);
 void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* current_steps, bool);
+void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_steps, bool absolute_mode);
+
+// handle_metadata_command() aux funcs
+void set_hotend_temp(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
+void set_bed_temp(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
+void set_fan_speed(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
 
 // create_initial_profile() helper functions
 float limit_velocity(float v_target, float ux, float uy, float uz);

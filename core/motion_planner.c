@@ -106,17 +106,17 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
 
     // home X axis
-    sprintf(move_cmd, "G0 X-%d.0 F600", MAX_DISTANCE_X);
+    sprintf(move_cmd, "G0 X-%.2f F600", MAX_DISTANCE_X);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
 
     // home Y axis
-    sprintf(move_cmd, "G0 Y-%d.0 F600", MAX_DISTANCE_Y);
+    sprintf(move_cmd, "G0 Y-%.2f F600", MAX_DISTANCE_Y);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
 
     // home Z axis
-    sprintf(move_cmd, "G0 Z-%d.0 F100", MAX_DISTANCE_Z);
+    sprintf(move_cmd, "G0 Z-%.2f F100", MAX_DISTANCE_Z);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
 
