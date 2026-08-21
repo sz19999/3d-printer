@@ -238,8 +238,7 @@ void oled_print_line(int32_t line, char* str) {
     }
 
     int32_t x = 0;
-    int32_t y = line * 8;   // +2 offsets the whole text down by 1 from the top
-                                // 9 is the lines height
+    int32_t y = line * 8;            
 
     oled_draw_string(x, y, str);
 }
