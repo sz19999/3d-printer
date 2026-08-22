@@ -1,5 +1,7 @@
 idf_component_register(
-    SRCS "tmc2209.c"
-    INCLUDE_DIRS "."
+    SRCS 
+        "tmc2209.c"
+    INCLUDE_DIRS 
+        "inc"
     REQUIRES driver
 )

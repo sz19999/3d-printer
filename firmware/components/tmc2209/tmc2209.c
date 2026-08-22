@@ -4,14 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "driver/uart.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
-
-
-#define TMC2209_UART_PORT      UART_NUM_1
-#define TMC2209_BAUD_RATE      115200
-#define TMC2209_TX_PIN         GPIO_NUM_17
-#define TMC2209_RX_PIN         GPIO_NUM_18
-#define TMC2209_READ_TIMEOUT_MS 100
 
 static const char *TAG = "TMC2209";
 
@@ -38,13 +32,36 @@ void tmc2209_init_uart(void) {
     setups tmc2209 motor driver
 */
 void setup_tmc2209(uint8_t driver_addr) {
-    // 1. Set current: Hold = ~0.3A, Run = ~0.8A, Delay = 6
-    uint32_t current_val = (6 << 16) | (20 << 8) | (8 << 0);
-    tmc2209_write_register(driver_addr, 0x10, current_val);
+   bool success = true;
 
-    // 2. Set microstepping: 1/16 step (MRES=4) with 256 interpolation
-    uint32_t chopconf_val = 0x10000053 | (4 << 24);
-    tmc2209_write_register(driver_addr, 0x6C, chopconf_val);
+    // 1. Enable UART control by setting pdn_disable bit (Bit 6) in GCONF
+    ESP_LOGI(TAG, "Configuring GCONF for driver 0x%02X...", driver_addr);
+    success = tmc2209_write_register(driver_addr, TMC2209_REG_GCONF, 0x00000040);
+
+    // 2. Set current limits: IHOLDDELAY = 6, IRUN = 20 (~0.8A RMS), IHOLD = 8 (~0.3A RMS)
+    ESP_LOGI(TAG, "Setting run/hold current for driver 0x%02X...", driver_addr);
+    uint32_t current_val = (6 << 16) | (20 << 8) | (8 << 0);
+    success = tmc2209_write_register(driver_addr, TMC2209_REG_IHOLD_IRUN, current_val);
+
+    // 3. Configure Microstepping via CHOPCONF (1/16 step with StealthChop2 interpolation)
+    ESP_LOGI(TAG, "Configuring microstepping (1/16) for driver 0x%02X...", driver_addr);
+    uint32_t chopconf_val = 0;
+    
+    // Read existing CHOPCONF to preserve internal chopper parameters
+    if (tmc2209_read_register(driver_addr, TMC2209_REG_CHOPCONF, &chopconf_val)) {
+        chopconf_val &= ~(0x0F << 24); // Clear MRES bits (27..24)
+        chopconf_val |= (4 << 24);     // MRES = 4 -> 1/16 microstepping
+        success = tmc2209_write_register(driver_addr, TMC2209_REG_CHOPCONF, chopconf_val);
+    } else {
+        // Fallback safe write if initial read fails (TOFF=3, HSTRT=5, HEND=0, MRES=1/16)
+        success = tmc2209_write_register(driver_addr, TMC2209_REG_CHOPCONF, 0x04000053);
+    }
+
+    if (!success) {
+        ESP_LOGE(TAG, "Failed to fully initialize TMC2209 driver at address 0x%02X over UART!", driver_addr);
+    } else {
+        ESP_LOGI(TAG, "TMC2209 driver at address 0x%02X initialized successfully.", driver_addr);
+    }
 }
 
 /*
@@ -139,3 +156,4 @@ bool tmc2209_read_register(uint8_t slave_addr, uint8_t reg_addr, uint32_t *out_v
 
     return true;
 }
+

@@ -3,5 +3,5 @@ idf_component_register(
         "tmc2209_test.c"
     INCLUDE_DIRS 
         "inc"
-    REQUIRES log driver tmc2209
+    REQUIRES driver tmc2209
 )
