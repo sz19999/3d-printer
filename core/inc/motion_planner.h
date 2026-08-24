@@ -6,9 +6,10 @@
 
 #include "gcode_parser.h"
 
-#define NUM_AXES    4   // X, Y, Z, E
-#define BUFFER_SIZE 16  // ring buffer size
-#define MIN_PLANNER_BLOCKS 3 // min amount of blocks to start dispatching from ring buffer
+#define NUM_AXES    4         // X, Y, Z, E
+#define BUFFER_SIZE 16        // ring buffer size
+#define MIN_PLANNER_BLOCKS 3  // min amount of blocks to start dispatching from ring buffer
+#define MIN_STEP_MM 0.005f    // min step allowed
 
 typedef enum {
     PLANNER_STATE_BUFFERING, // filling lookahead buffer; do not dispatch yet
@@ -31,7 +32,7 @@ typedef struct {
     float max_vector_acceleration;  
     
     // pre-calculated step generator parameters:
-    uint8_t dir_bits;           // dir_bits = [-, -, -, -, x_dir, y_dir, z_dir, e_dir]
+    uint8_t dir_bits;           // dir_bits = [x_dir, y_dir, z_dir, e_dir, -]
     uint8_t master_axis;        // axis with the most steps 
     uint32_t steps[NUM_AXES];   // number of steps of each axis -> steps[] = [x_steps, y_steps, z_steps, e_steps]
     uint32_t master_steps;

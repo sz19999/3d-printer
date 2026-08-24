@@ -46,7 +46,7 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 break;
             case 28:
                 // home axes
-                home_axes(buffer, current_mm, current_steps, absolute_mode);
+                //home_axes(buffer, current_mm, current_steps, absolute_mode);
                 break;
             case 90:
                 // absolute mode
@@ -61,6 +61,8 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
         }
     }
 }
+
+
 
 /*
     ***************************************
@@ -92,45 +94,61 @@ void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM* c
 }
 
 void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* current_steps, bool absolute_mode) {
-    update_target_coordinate(gcode_cmd, current_mm, absolute_mode);
-    convert_from_mm_to_steps(current_steps, current_mm);
+    //update_target_coordinate(gcode_cmd, current_mm, absolute_mode);
+    //convert_from_mm_to_steps(current_steps, current_mm);
+
+    if (gcode_cmd->has_X) current_mm->x = gcode_cmd->X;
+    if (gcode_cmd->has_Y) current_mm->y = gcode_cmd->Y;
+    if (gcode_cmd->has_Z) current_mm->z = gcode_cmd->Z;
+    if (gcode_cmd->has_E) current_mm->e = gcode_cmd->E;
 }
 
 void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_steps, bool absolute_mode) {
     GCodeCommand gcode_cmd;
 
     char* relative_cmd = "G91";
-    char* absolute_cmd = "G92";
+    char* absolute_cmd = "G90";
     char move_cmd[128];
     
     // change to relative mode
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
     parse_command(relative_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
-    
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", relative_cmd);
 
     // home X axis
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
     sprintf(move_cmd, "G0 X-%.2f F600", MAX_DISTANCE_X);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
     // home Y axis
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
     sprintf(move_cmd, "G0 Y-%.2f F600", MAX_DISTANCE_Y);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
     // home Z axis
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
     sprintf(move_cmd, "G0 Z-%.2f F100", MAX_DISTANCE_Z);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
     // restore to absolute mode
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
     parse_command(absolute_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", absolute_cmd);
+
+    current_mm->x = 0.0f;
+    current_mm->y = 0.0f;
+    current_mm->z = 0.0f;
+    current_steps->x = 0;
+    current_steps->y = 0;
+    current_steps->z = 0;
 }
 
 /*
@@ -507,17 +525,17 @@ void finalize_motion_profiles(RingBuffer* buffer) {
 float limit_velocity(float v_target, float ux, float uy, float uz) {
     float v_allowed = v_target;     // v_target > 0, it is a scalar
 
-    if (fabsf(ux) > 0.0001f) {
+    if (fabsf(ux) > 0.00001f) {
         float vx_limit = MAX_VELOCITY_X / fabsf(ux);     // compute max x axis velocity limit
         if (vx_limit < v_allowed) v_allowed = vx_limit; // clamp cruise speed
     }
 
-    if (fabsf(uy) > 0.0001f) {
+    if (fabsf(uy) > 0.00001f) {
         float vy_limit = MAX_VELOCITY_Y / fabsf(uy);     
         if (vy_limit < v_allowed) v_allowed = vy_limit; 
     }
 
-    if (fabsf(uz) > 0.0001f) {
+    if (fabsf(uz) > 0.00001f) {
         float vz_limit = MAX_VELOCITY_Z / fabsf(uz);     
         if (vz_limit < v_allowed) v_allowed = vz_limit; 
     }
@@ -538,7 +556,7 @@ void compute_unit_vectors(PlannedMotion* motion, float deltas_mm[]) {
     float ue = 0.0f;
     
     // compute unit vectors of the 4d vector
-    if (total_length > 0.0001f) {
+    if (total_length > 0.00001f) {
         float len_inv = 1.0f / total_length;  // calculate divison once
         ux = dx_mm * len_inv;
         uy = dy_mm * len_inv;
@@ -557,7 +575,7 @@ void compute_unit_vectors(PlannedMotion* motion, float deltas_mm[]) {
     uz = 0;
     float cartesian_length = motion->path_length_mm;
 
-    if (cartesian_length > 0.0001f) {
+    if (cartesian_length > 0.00001f) {
         float len_inv = 1.0f / cartesian_length;  // calculate divison once
         ux = dx_mm * len_inv;
         uy = dy_mm * len_inv;
@@ -577,10 +595,10 @@ void compute_max_path_and_vector_acceleration(PlannedMotion* motion) {
     float ue = motion->unit_vec[3];
 
     // compute max vector acceleration
-    if (fabsf(ux) > 0.0001f) accelerations[0] = MAX_ACCELERATION_X / fabsf(ux);
-    if (fabsf(uy) > 0.0001f) accelerations[1] = MAX_ACCELERATION_Y / fabsf(uy);
-    if (fabsf(uz) > 0.0001f) accelerations[2] = MAX_ACCELERATION_Z / fabsf(uz);
-    if (fabsf(ue) > 0.0001f) accelerations[3] = MAX_ACCELERATION_E / fabsf(ue);
+    if (fabsf(ux) > 0.00001f) accelerations[0] = MAX_ACCELERATION_X / fabsf(ux);
+    if (fabsf(uy) > 0.00001f) accelerations[1] = MAX_ACCELERATION_Y / fabsf(uy);
+    if (fabsf(uz) > 0.00001f) accelerations[2] = MAX_ACCELERATION_Z / fabsf(uz);
+    if (fabsf(ue) > 0.00001f) accelerations[3] = MAX_ACCELERATION_E / fabsf(ue);
 
     motion->max_vector_acceleration = accelerations[0];
     for (uint32_t i = 1; i < NUM_AXES; i++) {
@@ -595,9 +613,9 @@ void compute_max_path_and_vector_acceleration(PlannedMotion* motion) {
     uy = motion->cartesian_unit_vec[1];
     uz = motion->cartesian_unit_vec[2];
 
-    if (fabsf(ux) > 0.0001f) path_accels[0] = MAX_ACCELERATION_X / fabsf(ux);
-    if (fabsf(uy) > 0.0001f) path_accels[1] = MAX_ACCELERATION_Y / fabsf(uy);
-    if (fabsf(uz) > 0.0001f) path_accels[2] = MAX_ACCELERATION_Z / fabsf(uz);
+    if (fabsf(ux) > 0.00001f) path_accels[0] = MAX_ACCELERATION_X / fabsf(ux);
+    if (fabsf(uy) > 0.00001f) path_accels[1] = MAX_ACCELERATION_Y / fabsf(uy);
+    if (fabsf(uz) > 0.00001f) path_accels[2] = MAX_ACCELERATION_Z / fabsf(uz);
 
     motion->max_path_acceleration = path_accels[0];
     for (uint32_t i = 1; i < NUM_AXES - 1; i++) {
@@ -605,21 +623,38 @@ void compute_max_path_and_vector_acceleration(PlannedMotion* motion) {
             motion->max_path_acceleration = path_accels[i];
         }
     }
+
+    // Pure E-Move handling (Extrusions/Retractions)
+    if (motion->path_length_mm < 0.00001f && fabsf(ue) > 0.00001f) {
+        motion->max_path_acceleration = MAX_ACCELERATION_E;
+        return;
+    }
 }
 
 /*
     computes initial trapezoidal profile velocities: v_start, v_end and v_cruise
 */
 void compute_profile_velocities(GCodeCommand* gcode_cmd, PlannedMotion* motion, float* active_feedrate) {
-    float ux = motion->cartesian_unit_vec[0];
-    float uy = motion->cartesian_unit_vec[1];
-    float uz = motion->cartesian_unit_vec[2];
+    if (gcode_cmd->has_F) {
+        *active_feedrate = (gcode_cmd->F) / 60.0f; // mm/min to mm/s
+    }
 
+    if (motion->path_length_mm < 0.00001f && fabsf(motion->unit_vec[3]) > 0.00001f) {
+        // Pure extrusion / retraction move
+        float v_req = *active_feedrate;
+        if (v_req > MAX_VELOCITY_E) {
+            v_req = MAX_VELOCITY_E;
+        }
+        motion->v_cruise = v_req;
+    } else {
+        float ux = motion->cartesian_unit_vec[0];
+        float uy = motion->cartesian_unit_vec[1];
+        float uz = motion->cartesian_unit_vec[2];
+        motion->v_cruise = limit_velocity(*active_feedrate, ux, uy, uz);
+    }
 
-
-    if (gcode_cmd->has_F) *active_feedrate = (gcode_cmd->F) / 60.0f;       // extract desired feedrate and convert to mm/s
-    motion->v_cruise = limit_velocity(*active_feedrate, ux, uy, uz);    // find max feasible cruise speed
-    motion->v_entry = motion->v_exit = 0.0f;                            // set default enter and exit speeds
+    motion->v_entry = 0.0f;
+    motion->v_exit = 0.0f;
 }
 
 void update_target_coordinate(GCodeCommand* gcode_cmd, PointMM* target_mm, bool absolute_mode) {
@@ -698,7 +733,7 @@ void compute_path_and_vector_lengths(PlannedMotion* motion, float deltas_mm[]) {
     float de_mm = deltas_mm[3];
 
     // if move is pure extrusion, use E length
-    if (cartesian_length < 0.0001f) {
+    if (cartesian_length < 0.00001f) {
         total_length = fabsf(de_mm);
     }
 
