@@ -12,20 +12,23 @@
 #include "motion_planner.h"
 #include "spi_sd.h"
 #include "step_generator.h"
+#include "sys_state_machine.h"
 
 #define GCODE_LINE_MAX_LEN 128
 
 static const char *TAG_PARSER  = "PARSER_TASK";
 static const char *TAG_PLANNER = "PLANNER_TASK";
 static const char *TAG_MAIN    = "MAIN_APP";
-static const char *TAG_MOTION  = "MOTION_BLOCK";
+static const char *TAG_MOTION  = "MOTION_BLOCK_TASK";
 static const char *TAG_SD      = "SD_STREAMER_TASK";
-static const char *TAG_RMT     = "STEP_GENERATOR";
+static const char *TAG_RMT     = "STEP_GENERATOR_TASK";
+static const char *TAG_SYS     = "SYS_STATE_TASK";
 
 // Global handles for queues
-static QueueHandle_t gcode_line_queue = NULL;
-static QueueHandle_t gcode_cmds_queue = NULL;
-static QueueHandle_t motion_queue = NULL;
+QueueHandle_t gcode_line_queue = NULL;
+QueueHandle_t gcode_cmds_queue = NULL;
+QueueHandle_t motion_queue = NULL;
+QueueHandle_t gpio_evt_queue = NULL;
 
 // shared between motion planner and PID controller
 MotionMetadata metadata;
@@ -176,7 +179,6 @@ void motion_planner_task(void *pvParameters) {
     }
 }
 
-
 void step_generator_task(void *pvParameters) {
     const uint8_t step_pins[NUM_AXES] = {X_STEP_PIN, Y_STEP_PIN, Z_STEP_PIN, E_STEP_PIN};
     const uint8_t dir_pins[NUM_AXES]  = {X_DIR_PIN,  Y_DIR_PIN,  Z_DIR_PIN,  E_DIR_PIN};
@@ -305,12 +307,51 @@ void step_generator_task(void *pvParameters) {
     }
 }
 
+void sys_state_machine_task(void *pvParameters) {
+    ESP_LOGI(TAG_SYS, "Task started successfully on core %d", xPortGetCoreID());
+
+    init_button_interrupt();
+    int selection = 0;
+
+    while(1) {
+        ButtonEvent_t event = process_button_edges();
+
+        switch (event) {
+            case EVENT_SINGLE_CLICK:
+                selection = (selection + 1) % NUM_MENU_ITEMS;
+                //update_display(selection);
+                ESP_LOGI(TAG_SYS, "Single Click!");
+                break;
+
+            case EVENT_DOUBLE_CLICK:
+                selection = (selection - 1 + NUM_MENU_ITEMS) % NUM_MENU_ITEMS;
+                //update_display(selection);
+                ESP_LOGI(TAG_SYS, "Double Click!");
+                break;
+
+            case EVENT_LONG_PRESS:
+                //if (menu_items[selection].action) {
+                    //menu_items[selection].action(); // Execute function pointer
+                //}
+                ESP_LOGI(TAG_SYS, "Long Press!");
+                break;
+
+            case EVENT_NONE:
+            default:
+                break;
+        }
+
+        vTaskDelay(1); // Cooperative yield for parallel tasks
+    }
+}
+
 void app_main(void) {
     ESP_LOGI(TAG_MAIN, "Initializing IPC queues...");
 
     motion_queue     = xQueueCreate(16, sizeof(PlannedMotion));
     gcode_cmds_queue = xQueueCreate(2, sizeof(GCodeCommand));
     gcode_line_queue = xQueueCreate(2, GCODE_LINE_MAX_LEN);
+    
 
     if (!motion_queue || !gcode_cmds_queue || !gcode_line_queue) {
         ESP_LOGE(TAG_MAIN, "Failed to allocate FreeRTOS Queues!");
@@ -319,15 +360,24 @@ void app_main(void) {
 
     ESP_LOGI(TAG_MAIN, "Spawning FreeRTOS tasks...");
 
+    TaskHandle_t xParserTaskHandle  = NULL;
+    TaskHandle_t xSDTaskHandle      = NULL;
+    TaskHandle_t xPlannerTaskHandle = NULL;
+    TaskHandle_t xStepGenTaskHandle = NULL;
+
     xTaskCreatePinnedToCore(
         parser_task,
         "Parser_Task",
         4096,
         NULL,
         2,  // priority
-        NULL,
+        &xParserTaskHandle,
         0   // core 0
     );
+
+    if (xParserTaskHandle != NULL) {
+        vTaskSuspend(xParserTaskHandle);
+    }
 
     xTaskCreatePinnedToCore(
         motion_planner_task,
@@ -335,9 +385,13 @@ void app_main(void) {
         4096,
         NULL,
         2,
-        NULL,
+        &xPlannerTaskHandle,
         0
     );
+
+    if (xPlannerTaskHandle != NULL) {
+        vTaskSuspend(xPlannerTaskHandle);
+    }
 
     xTaskCreatePinnedToCore(
         step_generator_task,
@@ -345,9 +399,13 @@ void app_main(void) {
         4096,
         NULL,
         2,
-        NULL,
+        &xStepGenTaskHandle,
         1 // core 1
     );
+
+    if (xStepGenTaskHandle != NULL) {
+        vTaskSuspend(xStepGenTaskHandle);
+    }
 
     xTaskCreatePinnedToCore(
         sd_streamer_task,
@@ -355,10 +413,23 @@ void app_main(void) {
         4096,
         NULL,
         2,
-        NULL,
+        &xSDTaskHandle,
         0
     );
 
+    if (xSDTaskHandle != NULL) {
+        vTaskSuspend(xSDTaskHandle);
+    }
+
+    xTaskCreatePinnedToCore(
+        sys_state_machine_task,
+        "Sys_State_Machine_Task",
+        4096,
+        NULL,
+        2,
+        NULL,
+        0
+    );
 
     ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");
 }
