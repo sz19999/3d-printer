@@ -176,9 +176,9 @@ void oled_draw_pixel(int32_t x, int32_t y, int32_t color) {
     uint8_t mask  = 1 << (y % 8); 
 
     if (color == 1) {
-        oled_buffer[index] |= mask;
+        oled_buffer[index] |= mask; // Turn on
     } else {
-        oled_buffer[index] &= ~mask;
+        oled_buffer[index] &= ~mask; // Turn off
     }
 }
 
@@ -253,4 +253,46 @@ void oled_highlight_line(int32_t line) {
     for (int32_t col = 0; col < OLED_WIDTH; col++) {
         page_start[col] ^= 0xFF;
     }
+}
+
+
+void ui_draw_status_screen(int nozzle_temp, int bed_temp, float z_position, int progress) {
+    char buffer[30];
+    
+    oled_clear_screen();
+
+    spirntf(buffer, "Nozzle: %d C", nozzle_temp);
+    oled_print_line(0, buffer);
+
+    sprintf(buffer, "Bed   : %d C" ,bed_temp);
+    oled_print_line(1, buffer);
+
+    sprintf(buffer, "Z-Axis: %.2f mm" , z_position);
+    oled_print_line(3, buffer);
+
+    spirntf(buffer, "Status: %d%%", progress);
+    oled_print_line(5, buffer);
+
+    oled_print_line(7, "Read / Printing");
+
+    oled_flush();
+
+}
+
+void ui_draw_main_menu(int index) {
+    oled_clear_screen();
+    
+    oled_print_line(0, "--- MAIN MENU ---");
+    oled_print_line(1, " Print File");
+    oled_print_line(2, " Preheat PLA");
+    oled_print_line(3, " Auto Home");
+    oled_print_line(4, " Move Axis");
+    oled_print_line(5, " Disable Steppers");
+    oled_print_line(6, " Info");
+    
+    if (index >= 0 && index <= 5) {
+        oled_highlight_line(index + 1);
+    }
+    
+    oled_flush();
 }
