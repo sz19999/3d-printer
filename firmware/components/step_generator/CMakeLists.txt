@@ -6,5 +6,5 @@ idf_component_register(
         "inc"
         "../../../core/inc"
         "../../../"
-    REQUIRES driver
+    REQUIRES driver esp_driver_rmt esp_driver_gpio
 )

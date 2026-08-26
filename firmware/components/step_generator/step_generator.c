@@ -129,10 +129,15 @@ void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda,
                     .level1 = 0
                 };
             } else {
+                // RMT treats a duration of 0 as "hold this level forever", not "zero ticks" -
+                // split the idle period into two nonzero halves so the channel actually finishes.
+                uint16_t idle_half1 = (dda->c > 1) ? (uint16_t)(dda->c / 2) : 1;
+                uint16_t idle_half2 = (dda->c > idle_half1) ? (uint16_t)(dda->c - idle_half1) : 1;
+
                 buffers[axis][symbol_idx] = (rmt_symbol_word_t){
-                    .duration0 = dda->c,
+                    .duration0 = idle_half1,
                     .level0 = 0,
-                    .duration1 = 0,
+                    .duration1 = idle_half2,
                     .level1 = 0
                 };
             }

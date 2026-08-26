@@ -3,5 +3,5 @@ idf_component_register(
         "tmc2209.c"
     INCLUDE_DIRS 
         "inc"
-    REQUIRES driver
+    REQUIRES driver esp_driver_uart esp_driver_gpio
 )
