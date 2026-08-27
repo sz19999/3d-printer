@@ -10,46 +10,6 @@
 #include "esp_log.h"
 
 
-const char* TAG = "STEP_GEN_TEST";
-
-// Per-axis configuration instances
-static const axis_endstop_config_t AXIS_X_CFG = { .axis_id = 0, .step_pin = STEP_PIN_X, .rmt_channel = RMT_CHANNEL_X };
-static const axis_endstop_config_t AXIS_Y_CFG = { .axis_id = 1, .step_pin = STEP_PIN_Y, .rmt_channel = RMT_CHANNEL_Y };
-static const axis_endstop_config_t AXIS_Z_CFG = { .axis_id = 2, .step_pin = STEP_PIN_Z, .rmt_channel = RMT_CHANNEL_Z };
-
-// Global handle to the step generator task
-static TaskHandle_t s_step_task_handle = NULL;
-
-static void IRAM_ATTR multi_axis_endstop_isr(void *arg) {
-    // Cast void argument back to specific axis context
-    const axis_endstop_config_t *axis = (const axis_endstop_config_t *)arg;
-
-    // 1. HARDWARE OVERRIDE: Immediately force step pin LOW via Low-Layer HAL
-    gpio_ll_set_level(&GPIO, axis->step_pin, 0);
-    gpio_ll_output_enable(&GPIO, axis->step_pin);
-
-    // 2. PERIPHERAL SHUTDOWN: Reset RMT hardware registers directly
-    RMT.conf_ch[axis->rmt_channel].conf1.tx_start   = 0; // Stop transmission
-    RMT.conf_ch[axis->rmt_channel].conf1.mem_rd_rst = 1; // Pulse read pointer reset high
-    RMT.conf_ch[axis->rmt_channel].conf1.mem_rd_rst = 0; // Release reset
-
-    // 3. SOFTWARE NOTIFICATION: Unblock Step Generator Task via bitmask
-    if (s_step_task_handle != NULL) {
-        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
-        // Set bit corresponding to axis ID (Bit 0 = X, Bit 1 = Y, Bit 2 = Z)
-        xTaskNotifyFromISR(
-            s_step_task_handle,
-            (1 << axis->axis_id),
-            eSetBits,
-            &xHigherPriorityTaskWoken
-        );
-
-        // Yield immediately if Step Task has higher priority than current execution context
-        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-    }
-}
-
 void step_generator_task(void *pvParameters) {
     uint32_t abort_bitmask = 0;
 
@@ -100,6 +60,7 @@ void step_generator_task(void *pvParameters) {
                 ESP_LOGE(TAG, ">>> ABORT: AXIS X ENDSTOP TRIPPED! <<<");
                 // Stop the driver channel in software as well
                 rmt_disable(rmt_channels[0]);
+
             }
             if (abort_bitmask & (1 << AXIS_Y_CFG.axis_id)) {
                 ESP_LOGE(TAG, ">>> ABORT: AXIS Y ENDSTOP TRIPPED! <<<");
@@ -117,43 +78,7 @@ void step_generator_task(void *pvParameters) {
     }
 }
 
-// 1. Configure endstop GPIO pins & install the shared ISR
-void init_endstops(void) {
-
-    // Configure inputs with pull-ups (Active-LOW switches)
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << ENDSTOP_X_GPIO) | 
-                        (1ULL << ENDSTOP_Y_GPIO) | 
-                        (1ULL << ENDSTOP_Z_GPIO),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_NEGEDGE
-    };
-    gpio_config(&io_conf);
-
-    // Install central interrupt service dispatcher in IRAM
-    gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3);
-
-    // Register handlers for each axis
-    gpio_isr_handler_add(ENDSTOP_X_GPIO, multi_axis_endstop_isr, (void *)&AXIS_X_CFG);
-    gpio_isr_handler_add(ENDSTOP_Y_GPIO, multi_axis_endstop_isr, (void *)&AXIS_Y_CFG);
-    gpio_isr_handler_add(ENDSTOP_Z_GPIO, multi_axis_endstop_isr, (void *)&AXIS_Z_CFG);
-}
-
-TaskHandle_t start_step_generator_task(void) {
-    xTaskCreate(step_generator_task, "step_task", 4096, NULL, 3, &s_step_task_handle);
-    return s_step_task_handle;
-}
-
 void endstops_test(void) {
-    ESP_LOGI(TAG, "Initializing System...");
-
-    // 1. Start the step engine task
-    start_step_generator_task();
-
-    // 2. Setup ISR endstop interrupts
     init_endstops();
 
-    ESP_LOGI(TAG, "Step generator running and ISRs active.");
 }
