@@ -372,7 +372,10 @@ void backward_pass(RingBuffer* buffer) {
         // extract required parameters
         float v_entry = buffer->arr[curr_idx].v_entry;
         float v_exit = buffer->arr[curr_idx].v_exit;
-        float distance = buffer->arr[curr_idx].path_length_mm;
+        // pure E moves have path_length_mm == 0 (no XYZ travel); fall back to the E distance
+        float distance = (buffer->arr[curr_idx].path_length_mm > 0.00001f)
+            ? buffer->arr[curr_idx].path_length_mm
+            : buffer->arr[curr_idx].total_vector_length;
         float acceleration = buffer->arr[curr_idx].max_path_acceleration;
 
         // compute max theoretical v_enty in order to safely reach v_exit
@@ -415,7 +418,10 @@ void forward_pass(RingBuffer* buffer) {
         // extract required parameters
         float v_entry = buffer->arr[curr_idx].v_entry;
         float v_exit = buffer->arr[curr_idx].v_exit;
-        float distance = buffer->arr[curr_idx].path_length_mm;
+        // pure E moves have path_length_mm == 0 (no XYZ travel); fall back to the E distance
+        float distance = (buffer->arr[curr_idx].path_length_mm > 0.00001f)
+            ? buffer->arr[curr_idx].path_length_mm
+            : buffer->arr[curr_idx].total_vector_length;
         float acceleration = buffer->arr[curr_idx].max_path_acceleration;
 
         // compute max theoretical v_enty in order to safely reach v_exit
@@ -449,7 +455,10 @@ void recalculate_cruise_speed(RingBuffer* buffer) {
         // extract required parameters
         float v_entry = buffer->arr[curr_idx].v_entry;
         float v_exit = buffer->arr[curr_idx].v_exit;
-        float distance = buffer->arr[curr_idx].path_length_mm;
+        // pure E moves have path_length_mm == 0 (no XYZ travel); fall back to the E distance
+        float distance = (buffer->arr[curr_idx].path_length_mm > 0.00001f)
+            ? buffer->arr[curr_idx].path_length_mm
+            : buffer->arr[curr_idx].total_vector_length;
         float acceleration = buffer->arr[curr_idx].max_path_acceleration;
         float v_cruise = buffer->arr[curr_idx].v_cruise;
 
@@ -486,7 +495,11 @@ void finalize_motion_profiles(RingBuffer* buffer) {
 
         float accel_dist = (v_cruise * v_cruise - v_entry * v_entry) / (2.0f * a);
         float decel_dist = (v_cruise * v_cruise - v_exit * v_exit) / (2.0f * a);
-        float cruise_dist = buffer->arr[curr_idx].path_length_mm - decel_dist - accel_dist;
+        // pure E moves have path_length_mm == 0 (no XYZ travel); fall back to the E distance
+        float move_distance = (buffer->arr[curr_idx].path_length_mm > 0.00001f)
+            ? buffer->arr[curr_idx].path_length_mm
+            : buffer->arr[curr_idx].total_vector_length;
+        float cruise_dist = move_distance - decel_dist - accel_dist;
 
         if (cruise_dist < 0.0001f) {
             cruise_dist = 0.0f;

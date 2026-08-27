@@ -3,5 +3,5 @@ idf_component_register(
         "i2c_oled.c"
     INCLUDE_DIRS 
         "inc"
-    REQUIRES driver
+    REQUIRES driver esp_driver_i2c
 )

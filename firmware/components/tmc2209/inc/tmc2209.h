@@ -9,7 +9,11 @@
 #define TMC2209_TX_PIN         GPIO_NUM_17
 #define TMC2209_RX_PIN         GPIO_NUM_18
 #define TMC2209_READ_TIMEOUT_MS 100
-#define TMC2209_DRIVER_ADDR    0x00          // Address 0 (MS1 & MS2 connected to GND)
+
+#define TMC2209_X_ADDR         0x00
+#define TMC2209_Z_ADDR         0x01
+#define TMC2209_E_ADDR         0x02
+#define TMC2209_Y_ADDR         0x03
 
 // Registers:
 #define TMC2209_REG_GCONF      0x00
