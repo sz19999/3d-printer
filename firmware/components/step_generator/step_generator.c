@@ -11,7 +11,63 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 
-static const char *TAG_RMT = "RMT_STEPPER";
+
+extern const char *TAG_RMT;
+
+// Per-axis configuration instances
+static const axis_endstop_config_t AXIS_X_CFG = { .axis_id = 0, .step_pin = X_STEP_PIN, .rmt_channel = RMT_CHANNEL_X };
+static const axis_endstop_config_t AXIS_Y_CFG = { .axis_id = 1, .step_pin = Y_STEP_PIN, .rmt_channel = RMT_CHANNEL_Y };
+static const axis_endstop_config_t AXIS_Z_CFG = { .axis_id = 2, .step_pin = Z_STEP_PIN, .rmt_channel = RMT_CHANNEL_Z };
+
+extern TaskHandle_t xStepGenTaskHandle;
+
+static void IRAM_ATTR multi_axis_endstop_isr(void *arg) {
+    // Cast void argument back to specific axis context
+    const axis_endstop_config_t *axis = (const axis_endstop_config_t *)arg;
+
+    // 1. HARDWARE OVERRIDE: Immediately force step pin LOW via Low-Layer HAL
+    gpio_ll_set_level(&GPIO, axis->step_pin, 0);
+    gpio_ll_output_enable(&GPIO, axis->step_pin);
+
+    // 2. PERIPHERAL SHUTDOWN: Reset RMT hardware registers directly 
+    // --- replace these to match for ESP32-S3 ---
+    RMT.conf_ch[axis->rmt_channel].conf1.tx_start   = 0; // Stop transmission
+    RMT.conf_ch[axis->rmt_channel].conf1.mem_rd_rst = 1; // Pulse read pointer reset high
+    RMT.conf_ch[axis->rmt_channel].conf1.mem_rd_rst = 0; // Release reset
+
+    // 3. SOFTWARE NOTIFICATION: Unblock Step Generator Task via bitmask
+    if (xStepGenTaskHandle != NULL) {
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+        // Set bit corresponding to axis ID (Bit 0 = X, Bit 1 = Y, Bit 2 = Z)
+        xTaskNotifyFromISR(
+            xStepGenTaskHandle,
+            (1 << axis->axis_id),
+            eSetBits,
+            &xHigherPriorityTaskWoken
+        );
+
+        // Yield immediately if Step Task has higher priority than current execution context
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+}
+
+// callback triggered in ISR context when RMT finishes sending a buffer block
+static bool IRAM_ATTR rmt_stepper_done_cb(rmt_channel_handle_t tx_chan, const rmt_tx_done_event_data_t *edata, void *user_ctx) {
+    BaseType_t high_task_woken = pdFALSE;
+    TaskHandle_t generator_task_handle = (TaskHandle_t)user_ctx;
+
+    // Use xTaskNotifyFromISR with eSetBits to pass specific event flags
+    xTaskNotifyFromISR(
+        generator_task_handle,
+        RMT_TX_DONE_BIT,
+        eSetBits,
+        &high_task_woken
+    );
+
+    return high_task_woken == pdTRUE;
+}
+
 
 void init_stepper_rmt_channels(rmt_stepper_system_t *sys, const uint8_t step_pins[NUM_AXES]) {
     rmt_copy_encoder_config_t encoder_config = {};
@@ -25,7 +81,7 @@ void init_stepper_rmt_channels(rmt_stepper_system_t *sys, const uint8_t step_pin
             .clk_src = RMT_CLK_SRC_DEFAULT,
             .gpio_num = step_pins[i],
             .resolution_hz = 1000000,               // 1 MHz = 1 tick per microsecond
-            .mem_block_symbols = 48, // 64 symbols = 1 HW block
+            .mem_block_symbols = 64,                // 64 symbols = 1 HW block
             .trans_queue_depth = 4,                 // Software depth for DRAM ping-ponging
             .flags = {
                 .with_dma = false,
@@ -45,17 +101,6 @@ void init_stepper_rmt_channels(rmt_stepper_system_t *sys, const uint8_t step_pin
 }
 
 
-// callback triggered in ISR context when RMT finishes sending a buffer block
-static bool IRAM_ATTR rmt_stepper_done_cb(rmt_channel_handle_t tx_chan, const rmt_tx_done_event_data_t *edata, void *user_ctx) {
-    BaseType_t high_task_woken = pdFALSE;
-    TaskHandle_t generator_task_handle = (TaskHandle_t)user_ctx;
-
-    // signal the step generator task to prepare the next ping-pong buffer
-    vTaskNotifyGiveFromISR(generator_task_handle, &high_task_woken);
-
-    return high_task_woken == pdTRUE;
-}
-
 void register_stepper_callbacks(rmt_stepper_system_t *sys, TaskHandle_t generator_task) {
     rmt_tx_event_callbacks_t cbs = {
         .on_trans_done = rmt_stepper_done_cb,
@@ -64,6 +109,7 @@ void register_stepper_callbacks(rmt_stepper_system_t *sys, TaskHandle_t generato
     // attach the callback to one of the axes (e.g. X axis)
     rmt_tx_register_event_callbacks(sys->tx_channels[0], &cbs, (void *)generator_task);
 }
+
 
 void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda, 
     rmt_symbol_word_t buffers[NUM_AXES][SYMBOLS_PER_BLOCK], 
@@ -148,3 +194,28 @@ void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda,
 
     *generated_symbols = symbol_idx;
 }
+
+
+void init_endstops(void) {
+
+    // Configure inputs with pull-ups (Active-LOW switches)
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << ENDSTOP_X_GPIO) | 
+                        (1ULL << ENDSTOP_Y_GPIO) | 
+                        (1ULL << ENDSTOP_Z_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_NEGEDGE
+    };
+    gpio_config(&io_conf);
+
+    // Install central interrupt service dispatcher in IRAM
+    gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3);
+
+    // Register handlers for each axis
+    gpio_isr_handler_add(ENDSTOP_X_GPIO, multi_axis_endstop_isr, (void *)&AXIS_X_CFG);
+    gpio_isr_handler_add(ENDSTOP_Y_GPIO, multi_axis_endstop_isr, (void *)&AXIS_Y_CFG);
+    gpio_isr_handler_add(ENDSTOP_Z_GPIO, multi_axis_endstop_isr, (void *)&AXIS_Z_CFG);
+}
+
