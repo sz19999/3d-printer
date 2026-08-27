@@ -197,13 +197,12 @@ void step_generator_task(void *pvParameters) {
 
     ESP_LOGI(TAG_RMT, "Step Generator Task started on Core %d", xPortGetCoreID());
 
-    // 1. Initialize RMT Hardware Channels (64 symbols per block)
+    // 1. Initialize RMT Hardware Channels
     init_stepper_rmt_channels(&sys, step_pins);
 
     // 2. Register callback only on Master Channel
     register_stepper_callbacks(&sys, xTaskGetCurrentTaskHandle());
     
-
     // Configure Direction Pins as Outputs
     for (int i = 0; i < NUM_AXES; i++) {
         gpio_reset_pin(dir_pins[i]);
