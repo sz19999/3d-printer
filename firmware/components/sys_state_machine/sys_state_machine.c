@@ -4,8 +4,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "driver/gpio.h"
+#include "esp_log.h"
 
 extern QueueHandle_t gpio_evt_queue;
+extern const char *TAG_SYS;
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     ButtonEdge_t edge;
