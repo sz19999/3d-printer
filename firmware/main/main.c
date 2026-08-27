@@ -383,7 +383,7 @@ void step_generator_task(void *pvParameters) {
             if (abort_triggered) {
                 if (current_motion_mode == MOTION_MODE_HOMING) {
                     // HOMING MODE: Stop only the tripped axis
-                    uint8_t tripped_axis = (notify_value >> 1);
+                    uint8_t tripped_axis = (notify_value >> 1) & 0x03;
                     
                     ESP_LOGI(TAG_RMT, "Homing touch detected on Axis %d", tripped_axis);
                     rmt_disable(sys.tx_channels[tripped_axis]);
