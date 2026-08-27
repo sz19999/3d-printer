@@ -1,12 +1,15 @@
 #include "config.h"
 #include "motion_planner.h"
 #include "gcode_parser.h"
+#include "step_generator.h"
 #include "esp_log.h"
 
 #include <stdio.h>
 #include <math.h>
 #include <stdbool.h>
 #include <string.h> // for memset func
+
+extern motion_mode_t current_motion_mode;
 
 /* 
     checks if a G-code command is a motion command (G0, G1, G2, G3)
@@ -38,6 +41,7 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 // rapid move with no extrusion
             case 1:
                 // regular move with extrusion
+                current_motion_mode = MOTION_MODE_PRINTING;
                 plan_motion_segment(gcode_cmd, buffer, current_mm, current_steps, *absolute_mode);
                 break;
             case 92:
@@ -46,7 +50,8 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 break;
             case 28:
                 // home axes
-                //home_axes(buffer, current_mm, current_steps, absolute_mode);
+                current_motion_mode = MOTION_MODE_HOMING;
+                home_axes(buffer, current_mm, current_steps, absolute_mode);
                 break;
             case 90:
                 // absolute mode

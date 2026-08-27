@@ -37,15 +37,10 @@ typedef struct {
     uint32_t steps[NUM_AXES];   // number of steps of each axis -> steps[] = [x_steps, y_steps, z_steps, e_steps]
     uint32_t master_steps;
     float master_steps_per_mm;  // velocity scale factor: (master_steps / path_length_mm)
-    
-    //uint32_t initial_period;    // v_start pulse period
-    //uint32_t cruise_period;
-    //uint32_t final_period;
 
     uint32_t accel_steps;       // how much steps to accelerate
     uint32_t decel_steps;
     uint32_t cruise_steps;
-
 } PlannedMotion;
 
 typedef struct 
