@@ -261,7 +261,7 @@ void ui_draw_status_screen(int nozzle_temp, int bed_temp, float z_position, int 
     
     oled_clear_screen();
 
-    spirntf(buffer, "Nozzle: %d C", nozzle_temp);
+    sprintf(buffer, "Nozzle: %d C", nozzle_temp);
     oled_print_line(0, buffer);
 
     sprintf(buffer, "Bed   : %d C" ,bed_temp);
@@ -270,7 +270,7 @@ void ui_draw_status_screen(int nozzle_temp, int bed_temp, float z_position, int 
     sprintf(buffer, "Z-Axis: %.2f mm" , z_position);
     oled_print_line(3, buffer);
 
-    spirntf(buffer, "Status: %d%%", progress);
+    sprintf(buffer, "Status: %d%%", progress);
     oled_print_line(5, buffer);
 
     oled_print_line(7, "Read / Printing");
