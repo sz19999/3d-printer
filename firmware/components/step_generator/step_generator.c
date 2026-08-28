@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include "esp_attr.h"
 #include "esp_log.h"
+#include "hal/rmt_ll.h"
 
 
 extern const char *TAG_RMT;
@@ -31,9 +32,13 @@ static void IRAM_ATTR multi_axis_endstop_isr(void *arg) {
 
     // 2. PERIPHERAL SHUTDOWN: Reset RMT hardware registers directly 
     // --- replace these to match for ESP32-S3 ---
-    RMT.conf_ch[axis->rmt_channel].conf1.tx_start   = 0; // Stop transmission
-    RMT.conf_ch[axis->rmt_channel].conf1.mem_rd_rst = 1; // Pulse read pointer reset high
-    RMT.conf_ch[axis->rmt_channel].conf1.mem_rd_rst = 0; // Release reset
+    //RMT.conf_ch[axis->rmt_channel].conf1.tx_start   = 0; // Stop transmission
+    //RMT.conf_ch[axis->rmt_channel].conf1.mem_rd_rst = 1; // Pulse read pointer reset high
+    //RMT.conf_ch[axis->rmt_channel].conf1.mem_rd_rst = 0; // Release reset
+
+    // 2. PERIPHERAL SHUTDOWN: Reset RMT hardware registers directly (ESP32-S3 compatible)
+    rmt_ll_tx_stop(&RMT, axis->rmt_channel);            // Instantly stop TX hardware engine
+    rmt_ll_tx_reset_pointer(&RMT, axis->rmt_channel);   // Reset memory read pointer to index 0
 
     // 3. SOFTWARE NOTIFICATION: Unblock Step Generator Task via bitmask
     if (xStepGenTaskHandle != NULL) {
