@@ -365,7 +365,7 @@ void step_generator_task(void *pvParameters) {
                 }
             }
 
-            // --- 5. Drain or Emergency Cleanup ---
+            // Drain or Emergency Cleanup
             if (!abort_triggered) {
                 // Normal Drain Phase: Wait for remaining queued transactions to finish
                 while (active_transports > 0) {

@@ -128,6 +128,12 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
+    // move X away a few mm from the endstop
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
+    parse_command("G0 X5 F600", &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
+
     // home Y axis
     memset(&gcode_cmd, 0, sizeof(GCodeCommand));
     sprintf(move_cmd, "G0 Y-%.2f F600", MAX_DISTANCE_Y);
@@ -135,10 +141,22 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
+    // move Y away a few mm from the endstop
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
+    parse_command("G0 Y5 F600", &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
+
     // home Z axis
     memset(&gcode_cmd, 0, sizeof(GCodeCommand));
     sprintf(move_cmd, "G0 Z-%.2f F100", MAX_DISTANCE_Z);
     parse_command(move_cmd, &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
+
+    // move Z away a few mm from the endstop
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
+    parse_command("G0 Z5 F600", &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 

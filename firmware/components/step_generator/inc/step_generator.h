@@ -78,7 +78,6 @@ void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda,
     rmt_symbol_word_t buffers[NUM_AXES][SYMBOLS_PER_BLOCK], 
     size_t *generated_symbols
 );
-void step_generator_task(void *pvParameters);
 void init_endstops(void);
 
 
