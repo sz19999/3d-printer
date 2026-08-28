@@ -9,7 +9,6 @@
 #include <stdbool.h>
 #include <string.h> // for memset func
 
-extern motion_mode_t current_motion_mode;
 
 /* 
     checks if a G-code command is a motion command (G0, G1, G2, G3)
@@ -41,7 +40,7 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 // rapid move with no extrusion
             case 1:
                 // regular move with extrusion
-                current_motion_mode = MOTION_MODE_PRINTING;
+                set_motion_type(gcode_cmd, buffer);
                 plan_motion_segment(gcode_cmd, buffer, current_mm, current_steps, *absolute_mode);
                 break;
             case 92:
@@ -50,7 +49,7 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 break;
             case 28:
                 // home axes
-                current_motion_mode = MOTION_MODE_HOMING;
+                set_motion_type(gcode_cmd, buffer);
                 home_axes(buffer, current_mm, current_steps, absolute_mode);
                 break;
             case 90:
@@ -67,13 +66,23 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
     }
 }
 
-
+void set_motion_type(GCodeCommand* gcode_cmd, RingBuffer* buffer) {
+    // if a command is a motion, set its type: homing/printing
+    if (gcode_cmd->command_number == 0 || gcode_cmd->command_number == 1) {
+        buffer->arr->motion_mode = MOTION_MODE_PRINTING;
+    }
+    if (gcode_cmd->command_number == 28) {
+        buffer->arr->motion_mode = MOTION_MODE_HOMING;
+    }
+}
 
 /*
     ***************************************
     handle motion command auxiliary functions:
     ***************************************
 */
+
+
 
 void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM* current_mm,PointSteps* current_steps, bool absolute_mode) {
     PlannedMotion motion;

@@ -67,11 +67,6 @@ typedef struct {
     uint8_t rmt_channel;    // RMT peripheral channel to force-reset
 } axis_endstop_config_t;
 
-typedef enum {
-    MOTION_MODE_PRINTING, // Coordinated multi-axis moves (G1/G2/G3)
-    MOTION_MODE_HOMING    // Single-axis homing routines (G28)
-} motion_mode_t;
-
 void register_stepper_callbacks(rmt_stepper_system_t *sys, TaskHandle_t generator_task);
 void init_stepper_rmt_channels(rmt_stepper_system_t *sys, const uint8_t gpio_pins[NUM_AXES]);
 void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda, 

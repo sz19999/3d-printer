@@ -40,8 +40,6 @@ TaskHandle_t xSysStateTaskHandle = NULL;
 
 EventGroupHandle_t sys_event_group;
 
-motion_mode_t current_motion_mode;
-
 // shared between motion planner and PID controller
 MotionMetadata metadata;
 
@@ -381,7 +379,7 @@ void step_generator_task(void *pvParameters) {
             
 
             if (abort_triggered) {
-                if (current_motion_mode == MOTION_MODE_HOMING) {
+                if (motion.current_motion_mode == MOTION_MODE_HOMING) {
                     // HOMING MODE: Stop only the tripped axis
                     uint8_t tripped_axis = (notify_value >> 1) & 0x03;
                     
