@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 
@@ -15,14 +16,15 @@
 #include "sys_state_machine.h"
 
 #define GCODE_LINE_MAX_LEN 128
+#define SYS_RUNNING_BIT (1 << 0)
 
-static const char *TAG_PARSER  = "PARSER_TASK";
-static const char *TAG_PLANNER = "PLANNER_TASK";
-static const char *TAG_MAIN    = "MAIN_APP";
-static const char *TAG_MOTION  = "MOTION_BLOCK_TASK";
-static const char *TAG_SD      = "SD_STREAMER_TASK";
-static const char *TAG_RMT     = "STEP_GENERATOR_TASK";
-static const char *TAG_SYS     = "SYS_STATE_TASK";
+const char *TAG_PARSER  = "PARSER_TASK";
+const char *TAG_PLANNER = "PLANNER_TASK";
+const char *TAG_MAIN    = "MAIN_APP";
+const char *TAG_MOTION  = "MOTION_BLOCK_TASK";
+const char *TAG_SD      = "SD_STREAMER_TASK";
+const char *TAG_RMT     = "STEP_GENERATOR_TASK";
+const char *TAG_SYS     = "SYS_STATE_TASK";
 
 // Global handles for queues
 QueueHandle_t gcode_line_queue = NULL;
@@ -30,13 +32,31 @@ QueueHandle_t gcode_cmds_queue = NULL;
 QueueHandle_t motion_queue = NULL;
 QueueHandle_t gpio_evt_queue = NULL;
 
+TaskHandle_t xParserTaskHandle  = NULL;
+TaskHandle_t xSDTaskHandle      = NULL;
+TaskHandle_t xPlannerTaskHandle = NULL;
+TaskHandle_t xStepGenTaskHandle = NULL;
+TaskHandle_t xSysStateTaskHandle = NULL;
+
+EventGroupHandle_t sys_event_group;
+
 // shared between motion planner and PID controller
 MotionMetadata metadata;
+
 
 void print_motion_block(const PlannedMotion* block);
 
 void sd_streamer_task(void *pvParameters) {
     ESP_LOGI(TAG_SD, "Task started successfully on core %d", xPortGetCoreID());
+
+    // block here until the bit is set.
+    xEventGroupWaitBits(
+        sys_event_group,
+        SYS_RUNNING_BIT,
+        pdFALSE,        // Don't clear bit on exit (so other tasks stay unblocked)
+        pdTRUE,         // Wait for all bits
+        portMAX_DELAY   // Wait indefinitely
+    );
 
     // init & mount sd card
     sdmmc_card_t* card = NULL;
@@ -52,6 +72,14 @@ void sd_streamer_task(void *pvParameters) {
         ESP_LOGI(TAG_SD, "Opened gcode file scuccessfuly!");
         
         while(1) {
+            xEventGroupWaitBits(
+                sys_event_group,
+                SYS_RUNNING_BIT,
+                pdFALSE,        // Don't clear bit on exit (so other tasks stay unblocked)
+                pdTRUE,         // Wait for all bits
+                portMAX_DELAY   // Wait indefinitely
+            );
+
             char gcode_line[GCODE_LINE_MAX_LEN];
 
             // read gcode line
@@ -82,6 +110,14 @@ void parser_task(void *pvParameters) {
     ESP_LOGI(TAG_PARSER, "Task started successfully on core %d", xPortGetCoreID());
 
     while (1) {
+        xEventGroupWaitBits(
+                sys_event_group,
+                SYS_RUNNING_BIT,
+                pdFALSE,        // Don't clear bit on exit (so other tasks stay unblocked)
+                pdTRUE,         // Wait for all bits
+                portMAX_DELAY   // Wait indefinitely
+            );
+
         // Wait indefinitely for raw gcode string lines
         if (xQueueReceive(gcode_line_queue, gcode_line, portMAX_DELAY) == pdTRUE) {
             ESP_LOGI(TAG_PARSER, "Received raw line: \"%s\"", gcode_line);
@@ -123,6 +159,14 @@ void motion_planner_task(void *pvParameters) {
     ESP_LOGI(TAG_PLANNER, "Task started successfully on core %d", xPortGetCoreID());
     
     while (1) {
+        xEventGroupWaitBits(
+                sys_event_group,
+                SYS_RUNNING_BIT,
+                pdFALSE,        // Don't clear bit on exit (so other tasks stay unblocked)
+                pdTRUE,         // Wait for all bits
+                portMAX_DELAY   // Wait indefinitely
+            );
+
         memset(&gcode_cmd, 0, sizeof(GCodeCommand)); // reset gcode cmd holder
 
         if (xQueueReceive(gcode_cmds_queue, &gcode_cmd, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -197,30 +241,44 @@ void step_generator_task(void *pvParameters) {
 
     ESP_LOGI(TAG_RMT, "Step Generator Task started on Core %d", xPortGetCoreID());
 
-    // 1. Initialize RMT Hardware Channels
+    // initialize axes endstop switches
+    init_endstops();
+
+    // initialize RMT Hardware Channels
     init_stepper_rmt_channels(&sys, step_pins);
 
-    // 2. Register callback only on Master Channel
+    // register callback only on Master Channel
     register_stepper_callbacks(&sys, xTaskGetCurrentTaskHandle());
     
-    // Configure Direction Pins as Outputs
+    // configure direction pins as outputs
     for (int i = 0; i < NUM_AXES; i++) {
         gpio_reset_pin(dir_pins[i]);
         gpio_set_direction(dir_pins[i], GPIO_MODE_OUTPUT);
     }
 
     while (1) {
-        // Wait for next motion block from motion planner queue
+        xEventGroupWaitBits(
+                sys_event_group,
+                SYS_RUNNING_BIT,
+                pdFALSE,        // Don't clear bit on exit (so other tasks stay unblocked)
+                pdTRUE,         // Wait for all bits
+                portMAX_DELAY   // Wait indefinitely
+            );
+
+        // wait for next motion block from motion planner queue
         if (xQueueReceive(motion_queue, &motion, portMAX_DELAY) == pdTRUE) {
+            bool abort_triggered = false;
+            uint32_t notify_value = 0;
+
             ESP_LOGI(TAG_RMT, "Received motion block -> master_steps: %lu, dir_bits: 0x%02X", 
                      (unsigned long)motion.master_steps, motion.dir_bits);
 
-            // Set Direction Pins
+            // set direction pins
             for (int i = 0; i < NUM_AXES; i++) {
                 gpio_set_level(dir_pins[i], (motion.dir_bits >> i) & 0x01);
             }
 
-            // Initialize DDA state machine for new move block
+            // initialize DDA state machine for new move block
             dda.block = motion;
             dda.master_step_count = 0;
             memset(dda.accumulators, 0, sizeof(dda.accumulators));
@@ -228,7 +286,7 @@ void step_generator_task(void *pvParameters) {
             uint32_t active_bank = 0;
             uint32_t active_transports = 0;
 
-            // 3. Prime Bank 0 (Bank A)
+            // prime bank 0 (bank A)
             size_t symbols_written_a = 0;
             generate_dda_rmt_buffers(&dda, ping_pong_buff[0], &symbols_written_a);
             ESP_LOGI(TAG_RMT, "Primed Bank 0: %u symbols generated", (unsigned int)symbols_written_a);
@@ -243,10 +301,10 @@ void step_generator_task(void *pvParameters) {
                         &tx_config
                     ));
                 }
-                active_transports++; // Track queued bank
+                active_transports++; // track queued bank
             }
 
-            // 4. Prime Bank 1 (Bank B) if steps remain in current motion block
+            // prime bank 1 (bank B) if steps remain in current motion block
             size_t symbols_written_b = 0;
             if (dda.master_step_count < dda.block.master_steps) {
                 generate_dda_rmt_buffers(&dda, ping_pong_buff[1], &symbols_written_b);
@@ -262,43 +320,86 @@ void step_generator_task(void *pvParameters) {
                             &tx_config
                         ));
                     }
-                    active_transports++; // Track queued bank
+                    active_transports++; // track queued bank
                 }
             }
 
-            // 5. Streaming Loop: Fill released DRAM banks as Axis 0 ISR frees them
+            // streaming loop with endstop abort protection
             uint32_t iterations = 0;
-            while (dda.master_step_count < dda.block.master_steps) {
-                // Wait for Axis 0 ISR notification signaling bank completion
-                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-                active_transports--;
-
-                // Refill the released DRAM bank
-                size_t symbols_written = 0;
-                generate_dda_rmt_buffers(&dda, ping_pong_buff[active_bank], &symbols_written);
-
-                if (symbols_written > 0) {
-                    for (int axis = 0; axis < NUM_AXES; axis++) {
-                        ESP_ERROR_CHECK(rmt_transmit(
-                            sys.tx_channels[axis], 
-                            sys.copy_encoders[axis],
-                            ping_pong_buff[active_bank][axis],
-                            symbols_written * sizeof(rmt_symbol_word_t),
-                            &tx_config
-                        ));
+            while (dda.master_step_count < dda.block.master_steps && !abort_triggered) {
+                
+                // block until either: RMT TX Done fires OR Endstop ISR sends Abort Notification
+                if (xTaskNotifyWait(0, ULONG_MAX, &notify_value, portMAX_DELAY) == pdTRUE) {
+                    
+                    // check if notification came from Endstop ISR (bits 0x0F reserved for axis aborts)
+                    if (notify_value & 0x0F) {
+                        ESP_LOGE(TAG_RMT, ">>> ABORT SIGNAL RECEIVED (0x%02X) - CANCELLING BLOCK <<<", (unsigned int)notify_value);
+                        abort_triggered = true;
+                        break; // exit streaming loop immediately
                     }
-                    active_transports++;
-                }
 
-                // Flip active ping-pong bank index (0 -> 1 -> 0)
-                active_bank ^= 1;
-                iterations++;
+                    // otherwise, notification is RMT TX_DONE callback
+                    active_transports--;
+
+                    // refill released bank
+                    size_t symbols_written = 0;
+                    generate_dda_rmt_buffers(&dda, ping_pong_buff[active_bank], &symbols_written);
+
+                    if (symbols_written > 0) {
+                        for (int axis = 0; axis < NUM_AXES; axis++) {
+                            ESP_ERROR_CHECK(rmt_transmit(
+                                sys.tx_channels[axis], 
+                                sys.copy_encoders[axis],
+                                ping_pong_buff[active_bank][axis],
+                                symbols_written * sizeof(rmt_symbol_word_t),
+                                &tx_config
+                            ));
+                        }
+                        active_transports++;
+                    }
+
+                    active_bank ^= 1;
+                    iterations++;
+                }
             }
 
-            // 6. Drain Phase: Wait for remaining in-flight hardware transactions to finish
-            while (active_transports > 0) {
-                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-                active_transports--;
+            // Drain or Emergency Cleanup
+            if (!abort_triggered) {
+                // Normal Drain Phase: Wait for remaining queued transactions to finish
+                while (active_transports > 0) {
+                    if (xTaskNotifyWait(0, ULONG_MAX, &notify_value, portMAX_DELAY) == pdTRUE) {
+                        if (notify_value & 0x0F) { // Endstop hit during drain
+                            abort_triggered = true;
+                            break;
+                        }
+                        active_transports--;
+                    }
+                }
+            } 
+            
+
+            if (abort_triggered) {
+                if (motion.current_motion_mode == MOTION_MODE_HOMING) {
+                    // HOMING MODE: Stop only the tripped axis
+                    uint8_t tripped_axis = (notify_value >> 1) & 0x03;
+                    
+                    ESP_LOGI(TAG_RMT, "Homing touch detected on Axis %d", tripped_axis);
+                    rmt_disable(sys.tx_channels[tripped_axis]);
+                    rmt_enable(sys.tx_channels[tripped_axis]); // Re-arm immediately for back-off move
+                    
+                    // Motion queue is NOT flushed so back-off moves continue cleanly
+
+                } else {
+                    // PRINTING MODE: Unexpected Crash / Hard Limit
+                    ESP_LOGE(TAG_RMT, "CRITICAL: Unexpected endstop trip during print execution!");
+                    
+                    for (int axis = 0; axis < NUM_AXES; axis++) {
+                        rmt_disable(sys.tx_channels[axis]);
+                        rmt_enable(sys.tx_channels[axis]);
+                    }
+                    
+                    xQueueReset(motion_queue); // Flush remaining G-code execution stream
+                }
             }
 
             ESP_LOGI(TAG_RMT, "Motion block execution finished (%u ping-pong refills)", (unsigned int)iterations);
@@ -308,6 +409,9 @@ void step_generator_task(void *pvParameters) {
 
 void sys_state_machine_task(void *pvParameters) {
     ESP_LOGI(TAG_SYS, "Task started successfully on core %d", xPortGetCoreID());
+
+    // Broadcast ready signal to all unblocked tasks simultaneously
+    xEventGroupSetBits(sys_event_group, SYS_RUNNING_BIT);
 
     init_button_interrupt();
     int selection = 0;
@@ -347,11 +451,12 @@ void sys_state_machine_task(void *pvParameters) {
 void app_main(void) {
     ESP_LOGI(TAG_MAIN, "Initializing IPC queues...");
 
+    sys_event_group = xEventGroupCreate();
+
     motion_queue     = xQueueCreate(16, sizeof(PlannedMotion));
     gcode_cmds_queue = xQueueCreate(2, sizeof(GCodeCommand));
     gcode_line_queue = xQueueCreate(2, GCODE_LINE_MAX_LEN);
     
-
     if (!motion_queue || !gcode_cmds_queue || !gcode_line_queue) {
         ESP_LOGE(TAG_MAIN, "Failed to allocate FreeRTOS Queues!");
         return;
@@ -359,76 +464,11 @@ void app_main(void) {
 
     ESP_LOGI(TAG_MAIN, "Spawning FreeRTOS tasks...");
 
-    TaskHandle_t xParserTaskHandle  = NULL;
-    TaskHandle_t xSDTaskHandle      = NULL;
-    TaskHandle_t xPlannerTaskHandle = NULL;
-    TaskHandle_t xStepGenTaskHandle = NULL;
-
-    xTaskCreatePinnedToCore(
-        parser_task,
-        "Parser_Task",
-        4096,
-        NULL,
-        2,  // priority
-        &xParserTaskHandle,
-        0   // core 0
-    );
-
-    if (xParserTaskHandle != NULL) {
-        vTaskSuspend(xParserTaskHandle);
-    }
-
-    xTaskCreatePinnedToCore(
-        motion_planner_task,
-        "Planner_Task",
-        4096,
-        NULL,
-        2,
-        &xPlannerTaskHandle,
-        0
-    );
-
-    if (xPlannerTaskHandle != NULL) {
-        vTaskSuspend(xPlannerTaskHandle);
-    }
-
-    xTaskCreatePinnedToCore(
-        step_generator_task,
-        "Step_Generator_Task",
-        4096,
-        NULL,
-        2,
-        &xStepGenTaskHandle,
-        1 // core 1
-    );
-
-    if (xStepGenTaskHandle != NULL) {
-        vTaskSuspend(xStepGenTaskHandle);
-    }
-
-    xTaskCreatePinnedToCore(
-        sd_streamer_task,
-        "SD_Streamer_Task",
-        4096,
-        NULL,
-        2,
-        &xSDTaskHandle,
-        0
-    );
-
-    if (xSDTaskHandle != NULL) {
-        vTaskSuspend(xSDTaskHandle);
-    }
-
-    xTaskCreatePinnedToCore(
-        sys_state_machine_task,
-        "Sys_State_Machine_Task",
-        4096,
-        NULL,
-        2,
-        NULL,
-        0
-    );
+    xTaskCreatePinnedToCore(parser_task, "Parser_Task", 4096, NULL, 2, &xParserTaskHandle, 0);
+    xTaskCreatePinnedToCore(motion_planner_task, "Planner_Task", 4096, NULL, 2, &xPlannerTaskHandle, 0);
+    xTaskCreatePinnedToCore(step_generator_task, "Step_Generator_Task", 4096, NULL, 2, &xStepGenTaskHandle, 1);
+    xTaskCreatePinnedToCore(sd_streamer_task, "SD_Streamer_Task", 4096, NULL, 2, &xSDTaskHandle, 0);
+    xTaskCreatePinnedToCore(sys_state_machine_task, "Sys_State_Machine_Task", 4096, NULL, 2, &xSysStateTaskHandle, 0);
 
     ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");
 }

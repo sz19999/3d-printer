@@ -3,5 +3,5 @@ idf_component_register(
         "test_main.c"
     INCLUDE_DIRS 
         "."
-    REQUIRES oled_test sd_test tmc2209_test
+    REQUIRES oled_test sd_test tmc2209_test step_gen_test
 )

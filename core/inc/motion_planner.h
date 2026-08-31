@@ -16,6 +16,11 @@ typedef enum {
     PLANNER_STATE_RUNNING    // active execution; stream blocks to step generator
 } PlannerState;
 
+typedef enum {
+    MOTION_MODE_PRINTING, // Coordinated multi-axis moves (G1/G2/G3)
+    MOTION_MODE_HOMING    // Single-axis homing routines (G28)
+} motion_mode_t;
+
 // motion block consumed by the Step Generator task
 typedef struct {
     // motion planner parameters:
@@ -37,15 +42,12 @@ typedef struct {
     uint32_t steps[NUM_AXES];   // number of steps of each axis -> steps[] = [x_steps, y_steps, z_steps, e_steps]
     uint32_t master_steps;
     float master_steps_per_mm;  // velocity scale factor: (master_steps / path_length_mm)
-    
-    //uint32_t initial_period;    // v_start pulse period
-    //uint32_t cruise_period;
-    //uint32_t final_period;
 
     uint32_t accel_steps;       // how much steps to accelerate
     uint32_t decel_steps;
     uint32_t cruise_steps;
 
+    motion_mode_t motion_mode;  // printing/homing
 } PlannedMotion;
 
 typedef struct 
@@ -90,6 +92,7 @@ void finalize_motion_profiles(RingBuffer* buffer);
 void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*, PointSteps*, bool);
 void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* current_steps, bool);
 void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_steps, bool absolute_mode);
+void set_motion_type(GCodeCommand* gcode_cmd, RingBuffer* buffer);
 
 // handle_metadata_command() aux funcs
 void set_hotend_temp(GCodeCommand* gcode_cmd, MotionMetadata* metadata);

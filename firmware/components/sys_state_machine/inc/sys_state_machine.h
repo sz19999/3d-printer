@@ -5,7 +5,7 @@
 
 #define NUM_MENU_ITEMS   3           // 3 options in menu
 #define MENU_TIMEOUT 1000000 * 5 // 5sec
-#define BTN_PIN      GPIO_NUM_48
+#define BTN_PIN      GPIO_NUM_36    // 48 is the original pin
 
 typedef enum {
     EVENT_NONE,

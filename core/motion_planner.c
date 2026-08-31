@@ -1,12 +1,14 @@
 #include "config.h"
 #include "motion_planner.h"
 #include "gcode_parser.h"
+#include "step_generator.h"
 #include "esp_log.h"
 
 #include <stdio.h>
 #include <math.h>
 #include <stdbool.h>
 #include <string.h> // for memset func
+
 
 /* 
     checks if a G-code command is a motion command (G0, G1, G2, G3)
@@ -38,6 +40,7 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 // rapid move with no extrusion
             case 1:
                 // regular move with extrusion
+                set_motion_type(gcode_cmd, buffer);
                 plan_motion_segment(gcode_cmd, buffer, current_mm, current_steps, *absolute_mode);
                 break;
             case 92:
@@ -46,7 +49,8 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 break;
             case 28:
                 // home axes
-                //home_axes(buffer, current_mm, current_steps, absolute_mode);
+                set_motion_type(gcode_cmd, buffer);
+                home_axes(buffer, current_mm, current_steps, absolute_mode);
                 break;
             case 90:
                 // absolute mode
@@ -62,13 +66,23 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
     }
 }
 
-
+void set_motion_type(GCodeCommand* gcode_cmd, RingBuffer* buffer) {
+    // if a command is a motion, set its type: homing/printing
+    if (gcode_cmd->command_number == 0 || gcode_cmd->command_number == 1) {
+        buffer->arr->motion_mode = MOTION_MODE_PRINTING;
+    }
+    if (gcode_cmd->command_number == 28) {
+        buffer->arr->motion_mode = MOTION_MODE_HOMING;
+    }
+}
 
 /*
     ***************************************
     handle motion command auxiliary functions:
     ***************************************
 */
+
+
 
 void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM* current_mm,PointSteps* current_steps, bool absolute_mode) {
     PlannedMotion motion;
@@ -123,6 +137,12 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
+    // move X away a few mm from the endstop
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
+    parse_command("G0 X5 F600", &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
+
     // home Y axis
     memset(&gcode_cmd, 0, sizeof(GCodeCommand));
     sprintf(move_cmd, "G0 Y-%.2f F600", MAX_DISTANCE_Y);
@@ -130,10 +150,22 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
+    // move Y away a few mm from the endstop
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
+    parse_command("G0 Y5 F600", &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
+
     // home Z axis
     memset(&gcode_cmd, 0, sizeof(GCodeCommand));
     sprintf(move_cmd, "G0 Z-%.2f F100", MAX_DISTANCE_Z);
     parse_command(move_cmd, &gcode_cmd);
+    handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
+    ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
+
+    // move Z away a few mm from the endstop
+    memset(&gcode_cmd, 0, sizeof(GCodeCommand));
+    parse_command("G0 Z5 F600", &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 
