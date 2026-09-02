@@ -137,7 +137,7 @@ void thermal_task(void *pvParameters) {
         [1] = { .name = "BED",    .pwm_chan = PWM_CHANNEL_HEATBED, .adc_chan = BED_ADC_CHANNEL }
     };
     dual_adc_t sensors_adc;
-    extern thermistor_config_t th_config;
+    extern thermistor_config_t THERMISTOR_NTC3950_DEFAULT;
 
     adc_filter_init(&heaters[HEATER_HOTEND].filter, 0.15f);
     adc_filter_init(&heaters[HEATER_BED].filter, 0.1f);
@@ -164,7 +164,7 @@ void thermal_task(void *pvParameters) {
             }
 
             float smooth_mv = adc_filter_update(&h->filter, (float)raw_mv);
-            h->current_temp = thermistor_mv_to_celsius(smooth_mv, &th_config);
+            h->current_temp = thermistor_mv_to_celsius(smooth_mv, &THERMISTOR_NTC3950_DEFAULT);
 
             float pwm_output = 0.0f;
 

@@ -11,20 +11,58 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "hal/rmt_ll.h"
+#include "hal/gpio_ll.h"
 
 
 extern const char *TAG_RMT;
 
 // Per-axis configuration instances
-static const axis_endstop_config_t AXIS_X_CFG = { .axis_id = 0, .step_pin = X_STEP_PIN, .rmt_channel = RMT_CHANNEL_X };
-static const axis_endstop_config_t AXIS_Y_CFG = { .axis_id = 1, .step_pin = Y_STEP_PIN, .rmt_channel = RMT_CHANNEL_Y };
-static const axis_endstop_config_t AXIS_Z_CFG = { .axis_id = 2, .step_pin = Z_STEP_PIN, .rmt_channel = RMT_CHANNEL_Z };
+static const axis_endstop_config_t AXIS_X_CFG = { .axis_id = 0, .step_pin = X_STEP_PIN, .rmt_channel = RMT_CHANNEL_X, .endstop_pin = ENDSTOP_X_GPIO };
+static const axis_endstop_config_t AXIS_Y_CFG = { .axis_id = 1, .step_pin = Y_STEP_PIN, .rmt_channel = RMT_CHANNEL_Y, .endstop_pin = ENDSTOP_Y_GPIO };
+static const axis_endstop_config_t AXIS_Z_CFG = { .axis_id = 2, .step_pin = Z_STEP_PIN, .rmt_channel = RMT_CHANNEL_Z, .endstop_pin = ENDSTOP_Z_GPIO };
 
 extern TaskHandle_t xStepGenTaskHandle;
+
+// Endstop input pin per axis id (X, Y, Z). Used to arm/disarm the per-pin GPIO
+// interrupt so a coupled-noise interrupt storm can't run while an axis is idle
+// or backing away from its switch.
+static const gpio_num_t s_endstop_gpio[3] = { ENDSTOP_X_GPIO, ENDSTOP_Y_GPIO, ENDSTOP_Z_GPIO };
+
+void endstop_set_armed(uint8_t axis_id, bool armed) {
+    if (axis_id >= 3) return;   // axis 3 (E) has no endstop
+    if (armed) {
+        gpio_intr_enable(s_endstop_gpio[axis_id]);
+    } else {
+        gpio_intr_disable(s_endstop_gpio[axis_id]);
+    }
+}
+
+// --- DIAGNOSTIC INSTRUMENTATION (temporary) ---
+// raw_isr_hits : every time the GPIO ISR dispatcher calls our handler for this axis
+// confirmed_low: subset where the pin actually read LOW when the handler ran
+volatile uint32_t g_endstop_raw_isr_hits[NUM_AXES]  = {0};
+volatile uint32_t g_endstop_confirmed_low[NUM_AXES] = {0};
 
 static void IRAM_ATTR multi_axis_endstop_isr(void *arg) {
     // Cast void argument back to specific axis context
     const axis_endstop_config_t *axis = (const axis_endstop_config_t *)arg;
+
+    g_endstop_raw_isr_hits[axis->axis_id]++;
+
+    // 0. SELF-MASK: coupled motor-chopper noise fires this line at tens of kHz.
+    // Disable this pin's interrupt on the very first edge; the step task re-arms
+    // it once per RMT refill while the axis is still approaching. This turns an
+    // interrupt storm (watchdog reset) into at most one interrupt per refill.
+    gpio_ll_intr_disable(&GPIO, axis->endstop_pin);
+
+    // 1. GLITCH REJECT: endstops are active-LOW. A real trip holds the line LOW;
+    // a coupled spike does not. If the pin is already HIGH again, it was noise -
+    // stay masked and let the task re-arm.
+    if (gpio_ll_get_level(&GPIO, axis->endstop_pin) != 0) {
+        return;
+    }
+
+    g_endstop_confirmed_low[axis->axis_id]++;
 
     // 1. HARDWARE OVERRIDE: Immediately force step pin LOW via Low-Layer HAL
     gpio_ll_set_level(&GPIO, axis->step_pin, 0);
@@ -86,7 +124,7 @@ void init_stepper_rmt_channels(rmt_stepper_system_t *sys, const uint8_t step_pin
             .clk_src = RMT_CLK_SRC_DEFAULT,
             .gpio_num = step_pins[i],
             .resolution_hz = 1000000,               // 1 MHz = 1 tick per microsecond
-            .mem_block_symbols = 64,                // 64 symbols = 1 HW block
+            .mem_block_symbols = 48,                // 48 symbols = 1 HW block
             .trans_queue_depth = 4,                 // Software depth for DRAM ping-ponging
             .flags = {
                 .with_dma = false,
@@ -202,25 +240,33 @@ void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda,
 
 
 void init_endstops(void) {
-
-    // Configure inputs with pull-ups (Active-LOW switches)
+    // Active-LOW endstops: line idles HIGH, goes LOW on trigger.
+    // Use an external 4.7k-10k pull-up to 3V3 near the MCU for noise immunity on
+    // long cables; the internal pull-up here is only a fallback.
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << ENDSTOP_X_GPIO) | 
-                        (1ULL << ENDSTOP_Y_GPIO) | 
+        .pin_bit_mask = (1ULL << ENDSTOP_X_GPIO) |
+                        (1ULL << ENDSTOP_Y_GPIO) |
                         (1ULL << ENDSTOP_Z_GPIO),
         .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_NEGEDGE
     };
-    gpio_config(&io_conf);
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
 
-    // Install central interrupt service dispatcher in IRAM
-    gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3);
+    // DIAGNOSTIC: raw idle levels straight after config. All three should read 1.
+    ESP_LOGW(TAG_RMT, "Endstop idle levels: X(%d)=%d Y(%d)=%d Z(%d)=%d",
+             ENDSTOP_X_GPIO, gpio_get_level(ENDSTOP_X_GPIO),
+             ENDSTOP_Y_GPIO, gpio_get_level(ENDSTOP_Y_GPIO),
+             ENDSTOP_Z_GPIO, gpio_get_level(ENDSTOP_Z_GPIO));
+
+    esp_err_t err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err); // Only crash if it's a real error
+    }
 
     // Register handlers for each axis
-    gpio_isr_handler_add(ENDSTOP_X_GPIO, multi_axis_endstop_isr, (void *)&AXIS_X_CFG);
-    gpio_isr_handler_add(ENDSTOP_Y_GPIO, multi_axis_endstop_isr, (void *)&AXIS_Y_CFG);
-    gpio_isr_handler_add(ENDSTOP_Z_GPIO, multi_axis_endstop_isr, (void *)&AXIS_Z_CFG);
+    ESP_ERROR_CHECK(gpio_isr_handler_add(ENDSTOP_X_GPIO, multi_axis_endstop_isr, (void *)&AXIS_X_CFG));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(ENDSTOP_Y_GPIO, multi_axis_endstop_isr, (void *)&AXIS_Y_CFG));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(ENDSTOP_Z_GPIO, multi_axis_endstop_isr, (void *)&AXIS_Z_CFG));
 }
-

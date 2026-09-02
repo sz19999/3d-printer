@@ -5,10 +5,10 @@
     "board/esp32s3-builtin.cfg"
   ],
   "idf.customExtraVars": {},
-  "clangd.path": "C:\\Users\\seanz\\.espressif\\tools\\esp-clang\\esp-19.1.2_20250312\\esp-clang\\bin\\clangd.exe",
+  "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=c:\\Users\\seanz\\Desktop\\capstone-project\\3d-printer\\build"
+    "--compile-commands-dir=c:\\Users\\zika_\\Desktop\\Final Project\\3d-printer\\build"
   ]
 }

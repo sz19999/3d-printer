@@ -289,6 +289,26 @@ void step_generator_task(void *pvParameters) {
             dda.master_step_count = 0;
             memset(dda.accumulators, 0, sizeof(dda.accumulators));
 
+            // Arm endstops only for a homing move whose master axis is driving
+            // TOWARD its switch (negative dir bit). Back-off moves, non-master
+            // axes, and print moves get their endstop interrupt disabled so
+            // coupled motor noise can't storm the CPU.
+            bool homing_approach = false;
+            uint8_t approach_axis = motion.master_axis;
+            if (motion.motion_mode == MOTION_MODE_HOMING && approach_axis < 3 &&
+                ((motion.dir_bits >> approach_axis) & 0x01)) {
+                homing_approach = true;
+            }
+            for (uint8_t a = 0; a < 3; a++) {
+                endstop_set_armed(a, homing_approach && a == approach_axis);
+            }
+
+            // Flush notification bits latched since the previous block (boot-time
+            // pin transients, between-block endstop glitches, leftover RMT_TX_DONE)
+            // so a stale bit isn't misread as an abort on this block's first wait.
+            xTaskNotifyStateClear(NULL);
+            ulTaskNotifyValueClear(NULL, ULONG_MAX);
+
             uint32_t active_bank = 0;
             uint32_t active_transports = 0;
 
@@ -340,12 +360,25 @@ void step_generator_task(void *pvParameters) {
                     // check if notification came from Endstop ISR (bits 0x0F reserved for axis aborts)
                     if (notify_value & 0x0F) {
                         ESP_LOGE(TAG_RMT, ">>> ABORT SIGNAL RECEIVED (0x%02X) - CANCELLING BLOCK <<<", (unsigned int)notify_value);
+                        ESP_LOGE(TAG_RMT, "    live levels X=%d Y=%d Z=%d | ISR raw/low  X=%lu/%lu  Y=%lu/%lu  Z=%lu/%lu",
+                                 gpio_get_level(ENDSTOP_X_GPIO), gpio_get_level(ENDSTOP_Y_GPIO), gpio_get_level(ENDSTOP_Z_GPIO),
+                                 (unsigned long)g_endstop_raw_isr_hits[0], (unsigned long)g_endstop_confirmed_low[0],
+                                 (unsigned long)g_endstop_raw_isr_hits[1], (unsigned long)g_endstop_confirmed_low[1],
+                                 (unsigned long)g_endstop_raw_isr_hits[2], (unsigned long)g_endstop_confirmed_low[2]);
                         abort_triggered = true;
                         break; // exit streaming loop immediately
                     }
 
                     // otherwise, notification is RMT TX_DONE callback
                     active_transports--;
+
+                    // Re-arm the approaching endstop: the ISR self-masks on its
+                    // first (usually noise) edge, so without this a real touch
+                    // after that point would be missed. Once per refill is
+                    // frequent enough for homing feedrates.
+                    if (homing_approach) {
+                        endstop_set_armed(approach_axis, true);
+                    }
 
                     // refill released bank
                     size_t symbols_written = 0;
@@ -385,25 +418,30 @@ void step_generator_task(void *pvParameters) {
             
 
             if (abort_triggered) {
-                if (motion.motion_mode == MOTION_MODE_HOMING) {
-                    // HOMING MODE: Stop only the tripped axis
-                    uint8_t tripped_axis = (notify_value >> 1) & 0x03;
-                    
-                    ESP_LOGI(TAG_RMT, "Homing touch detected on Axis %d", tripped_axis);
-                    rmt_disable(sys.tx_channels[tripped_axis]);
-                    rmt_enable(sys.tx_channels[tripped_axis]); // Re-arm immediately for back-off move
-                    
-                    // Motion queue is NOT flushed so back-off moves continue cleanly
+                // Decode which axis tripped (explicit, single-bit).
+                uint8_t tripped_axis = 0;
+                if      (notify_value & ENDSTOP_X_TRIGGERED) tripped_axis = 0;
+                else if (notify_value & ENDSTOP_Y_TRIGGERED) tripped_axis = 1;
+                else if (notify_value & ENDSTOP_Z_TRIGGERED) tripped_axis = 2;
 
+                // The endstop ISR stopped only the tripped channel via rmt_ll and
+                // left a queued ping-pong bank behind; the other channels still
+                // hold this block's transactions. Cycle all of them clean.
+                for (int axis = 0; axis < NUM_AXES; axis++) {
+                    rmt_disable(sys.tx_channels[axis]);
+                    rmt_enable(sys.tx_channels[axis]);
+                }
+
+                if (motion.motion_mode == MOTION_MODE_HOMING) {
+                    ESP_LOGI(TAG_RMT, "Homing touch detected on Axis %d", tripped_axis);
+                    // Ignore this switch from now on: the carriage is pressing it,
+                    // and the next planned move drives away from it. It re-arms
+                    // only when a future homing block approaches it again.
+                    endstop_set_armed(tripped_axis, false);
+                    // motion_queue NOT flushed -> the planned back-off move runs next
                 } else {
                     // PRINTING MODE: Unexpected Crash / Hard Limit
                     ESP_LOGE(TAG_RMT, "CRITICAL: Unexpected endstop trip during print execution!");
-                    
-                    for (int axis = 0; axis < NUM_AXES; axis++) {
-                        rmt_disable(sys.tx_channels[axis]);
-                        rmt_enable(sys.tx_channels[axis]);
-                    }
-                    
                     xQueueReset(motion_queue); // Flush remaining G-code execution stream
                 }
             }
@@ -476,7 +514,7 @@ void app_main(void) {
     xTaskCreatePinnedToCore(step_generator_task, "Step_Generator_Task", 4096, NULL, 2, &xStepGenTaskHandle, 1);
     xTaskCreatePinnedToCore(sd_streamer_task, "SD_Streamer_Task", 4096, NULL, 2, &xSDTaskHandle, 0);
     xTaskCreatePinnedToCore(sys_state_machine_task, "Sys_State_Machine_Task", 4096, NULL, 2, &xSysStateTaskHandle, 0);
-    xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
+    //xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
 
     ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");
 }

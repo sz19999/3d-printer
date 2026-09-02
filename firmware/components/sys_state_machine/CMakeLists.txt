@@ -3,5 +3,5 @@ idf_component_register(
         "sys_state_machine.c"
     INCLUDE_DIRS 
         "inc"
-    REQUIRES driver esp_timer
+    REQUIRES driver esp_timer esp_driver_gpio
 )

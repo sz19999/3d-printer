@@ -1,5 +1,6 @@
 #include "thermistor.h"
 #include "esp_log.h"
+#include <math.h>
 
 static const char *TAG = "THERMISTOR";
 

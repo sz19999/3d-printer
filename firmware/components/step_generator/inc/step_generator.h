@@ -12,19 +12,19 @@
 #include "hal/gpio_ll.h"
 #include "soc/rmt_struct.h"
 
-#define X_STEP_PIN          GPIO_NUM_16 // 47 (the commented pins are the original pins)      
-#define Y_STEP_PIN          GPIO_NUM_17 // 38
-#define Z_STEP_PIN          GPIO_NUM_5  // 40    
-#define E_STEP_PIN          GPIO_NUM_21 // 42
+#define X_STEP_PIN          GPIO_NUM_47 // 47 (the commented pins are the original pins)      
+#define Y_STEP_PIN          GPIO_NUM_38 // 38
+#define Z_STEP_PIN          GPIO_NUM_40  // 40    
+#define E_STEP_PIN          GPIO_NUM_42 // 42
 
 #define X_DIR_PIN           GPIO_NUM_21 
-#define Y_DIR_PIN           GPIO_NUM_32 // 39
-#define Z_DIR_PIN           GPIO_NUM_31 // 41
+#define Y_DIR_PIN           GPIO_NUM_39 // 39
+#define Z_DIR_PIN           GPIO_NUM_41 // 41
 #define E_DIR_PIN           GPIO_NUM_2
 
-#define ENDSTOP_X_GPIO      GPIO_NUM_0  // these are for test only
-#define ENDSTOP_Y_GPIO      GPIO_NUM_2
-#define ENDSTOP_Z_GPIO      GPIO_NUM_4
+#define ENDSTOP_X_GPIO      GPIO_NUM_1
+#define ENDSTOP_Y_GPIO      GPIO_NUM_14
+#define ENDSTOP_Z_GPIO      GPIO_NUM_48  // was 36: collided with BTN_PIN and is an octal-PSRAM pin
 
 #define RMT_CHANNEL_X       0
 #define RMT_CHANNEL_Y       1
@@ -32,7 +32,7 @@
 #define RMT_CHANNEL_E       3
 
 #define NUM_AXES            4
-#define SYMBOLS_PER_BLOCK   48 // 64
+#define SYMBOLS_PER_BLOCK   48 
 #define MEM_BLOCKS_PER_AXIS 2  // 2 blocks = 128 symbols total per channel for Ping-Pong
 
 // Endstop Abort Bits (Bits 0–3)
@@ -62,9 +62,10 @@ typedef struct {
 } multi_axis_dda_generator_t;
 
 typedef struct {
-    uint8_t axis_id;        // 0 = X, 1 = Y, 2 = Z (Used for task bitmask)
-    gpio_num_t step_pin;    // Step pin to decouple/force LOW
-    uint8_t rmt_channel;    // RMT peripheral channel to force-reset
+    uint8_t axis_id;         // 0 = X, 1 = Y, 2 = Z (Used for task bitmask)
+    gpio_num_t step_pin;     // Step pin to decouple/force LOW
+    uint8_t rmt_channel;     // RMT peripheral channel to force-reset
+    gpio_num_t endstop_pin;  // Endstop input pin (re-read in ISR to reject glitches)
 } axis_endstop_config_t;
 
 void register_stepper_callbacks(rmt_stepper_system_t *sys, TaskHandle_t generator_task);
@@ -74,6 +75,14 @@ void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda,
     size_t *generated_symbols
 );
 void init_endstops(void);
+
+// Enable/disable the GPIO interrupt for one axis's endstop (axis_id 0=X,1=Y,2=Z).
+// Used to keep endstops disarmed except while an axis is homing toward its switch.
+void endstop_set_armed(uint8_t axis_id, bool armed);
+
+// DIAGNOSTIC INSTRUMENTATION (temporary): endstop ISR hit counters, indexed by axis id.
+extern volatile uint32_t g_endstop_raw_isr_hits[NUM_AXES];
+extern volatile uint32_t g_endstop_confirmed_low[NUM_AXES];
 
 
 #endif
