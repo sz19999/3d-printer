@@ -9,5 +9,5 @@ idf_component_register(
         "../../core"
         "../../core/inc"
         "../.."
-    REQUIRES log freertos spi_sd i2c_oled tmc2209 step_generator sys_state_machine
+    REQUIRES log freertos spi_sd i2c_oled tmc2209 step_generator sys_state_machine thermal
 )

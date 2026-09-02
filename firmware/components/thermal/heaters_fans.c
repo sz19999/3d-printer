@@ -16,7 +16,7 @@ typedef struct {
 static const mosfet_config_t g_mosfet_map[PWM_CH_NUM] = {
     [PWM_CHANNEL_HOTEND] = { .gpio_num = HOTEND_GPIO,  .channel = LEDC_CHANNEL_0, .timer = LEDC_TIMER_0, .name = "Hotend"  },
     [PWM_CHANNEL_HEATBED] = { .gpio_num = HEATBED_GPIO, .channel = LEDC_CHANNEL_1, .timer = LEDC_TIMER_0, .name = "Heatbed" },
-    [PWM_CHANNEL_FAN]     = { .gpio_num = FAN_GPIO,     .channel = LEDC_CHANNEL_2, .timer = LEDC_TIMER_1, .name = "Fan"     }
+    [PWM_CHANNEL_PART_FAN] = { .gpio_num = PART_FAN_GPIO, .channel = LEDC_CHANNEL_2, .timer = LEDC_TIMER_1, .name = "PartFan"     }
 };
 
 void mosfet_driver_init(void) {

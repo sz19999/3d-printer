@@ -7,7 +7,7 @@
 
 #define HOTEND_GPIO         GPIO_NUM_7
 #define HEATBED_GPIO        GPIO_NUM_6
-#define FAN_GPIO            GPIO_NUM_15
+#define PART_FAN_GPIO       GPIO_NUM_15
 
 #define HEATER_PWM_FREQ_HZ  100                 // Low frequency for thermal stability & low EMI
 #define FAN_PWM_FREQ_HZ     25000               // High frequency (25 kHz) to avoid audible motor hum
@@ -18,7 +18,7 @@
 typedef enum {
     PWM_CHANNEL_HOTEND = 0,
     PWM_CHANNEL_HEATBED,
-    PWM_CHANNEL_FAN
+    PWM_CHANNEL_PART_FAN
 } pwm_channel_t;
 
 /*

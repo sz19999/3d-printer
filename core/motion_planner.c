@@ -195,16 +195,14 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     M140 S60  = set bed temperature
     M106 S200 = set fan speed (0-255)
 */
-void handle_metadata_command(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
+void handle_metadata_command(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata) {
     if (gcode_cmd->command_letter == 'M') {
         switch (gcode_cmd->command_number) {
             case 104:  // Set hotend temperature
             case 109:  // Set hotend temperature and wait
-                set_hotend_temp(gcode_cmd, metadata);
-                break;
             case 140:  // Set bed temperature
             case 190:  // Set bed temperature and wait
-                set_bed_temp(gcode_cmd, metadata);
+                set_heater_temp(gcode_cmd, metadata);
                 break;
             case 106:  // Set fan speed
             case 107:  // turn off fan
@@ -222,30 +220,18 @@ void handle_metadata_command(GCodeCommand* gcode_cmd, MotionMetadata* metadata) 
     ***************************************
 */
 
-void set_hotend_temp(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
+
+void set_heater_temp(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata) {
     if (gcode_cmd->has_S) {
-        if (metadata->extruder_temp_target != gcode_cmd->S) {
-            metadata->extruder_temp_target = gcode_cmd->S;
-            metadata->temp_changed = true;
-        }
+        metadata->temp_target = gcode_cmd->S;
+        metadata->cmd_num = gcode_cmd->command_number;
     }
 }
 
-void set_bed_temp(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
+void set_fan_speed(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata) {
     if (gcode_cmd->has_S) {
-        if (metadata->bed_temp_target != gcode_cmd->S) {
-            metadata->bed_temp_target = gcode_cmd->S;
-            metadata->temp_changed = true;
-        }
-    }
-}
-
-void set_fan_speed(GCodeCommand* gcode_cmd, MotionMetadata* metadata) {
-    if (gcode_cmd->has_S) {
-        if (metadata->fan_speed != (uint8_t)gcode_cmd->S) {
-            metadata->fan_speed = (uint8_t)gcode_cmd->S;
-            metadata->fan_changed = true;
-        }
+        metadata->fan_speed = gcode_cmd->S;
+        metadata->cmd_num = gcode_cmd->command_number;
     }
 }
 

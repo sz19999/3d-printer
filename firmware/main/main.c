@@ -14,6 +14,7 @@
 #include "spi_sd.h"
 #include "step_generator.h"
 #include "sys_state_machine.h"
+#include "thermal_task.h"
 
 #define GCODE_LINE_MAX_LEN 128
 #define SYS_RUNNING_BIT (1 << 0)
@@ -25,24 +26,24 @@ const char *TAG_MOTION  = "MOTION_BLOCK_TASK";
 const char *TAG_SD      = "SD_STREAMER_TASK";
 const char *TAG_RMT     = "STEP_GENERATOR_TASK";
 const char *TAG_SYS     = "SYS_STATE_TASK";
+//const char *TAG_THERMAL = "THERMAL_TASK";
 
 // Global handles for queues
 QueueHandle_t gcode_line_queue = NULL;
 QueueHandle_t gcode_cmds_queue = NULL;
 QueueHandle_t motion_queue = NULL;
 QueueHandle_t gpio_evt_queue = NULL;
+QueueHandle_t thermal_cmds_queue = NULL;
+
 
 TaskHandle_t xParserTaskHandle  = NULL;
 TaskHandle_t xSDTaskHandle      = NULL;
 TaskHandle_t xPlannerTaskHandle = NULL;
 TaskHandle_t xStepGenTaskHandle = NULL;
 TaskHandle_t xSysStateTaskHandle = NULL;
+TaskHandle_t xThermalTaskHandle = NULL;
 
 EventGroupHandle_t sys_event_group;
-
-// shared between motion planner and PID controller
-MotionMetadata metadata;
-
 
 void print_motion_block(const PlannedMotion* block);
 
@@ -184,8 +185,13 @@ void motion_planner_task(void *pvParameters) {
                 }
             } else {
                 ESP_LOGI(TAG_PLANNER, "Command identified as NON-MOTION (Heater/Fan/State). Processing metadata...");
+                thermal_cmd_t metadata;
+                memset(&metadata, 0, sizeof(thermal_cmd_t));
                 handle_metadata_command(&gcode_cmd, &metadata);
-                // TODO: dispatch printing status to OLED Task
+
+                if (xQueueSend(thermal_cmds_queue, thermal_cmds_queue, portMAX_DELAY) == pdPASS) {
+                    ESP_LOGI(TAG_SD, "Dispatched thermal command to thermal_cmds_queue.");
+                }
             }
         }
         else {
@@ -379,7 +385,7 @@ void step_generator_task(void *pvParameters) {
             
 
             if (abort_triggered) {
-                if (motion.current_motion_mode == MOTION_MODE_HOMING) {
+                if (motion.motion_mode == MOTION_MODE_HOMING) {
                     // HOMING MODE: Stop only the tripped axis
                     uint8_t tripped_axis = (notify_value >> 1) & 0x03;
                     
@@ -456,6 +462,7 @@ void app_main(void) {
     motion_queue     = xQueueCreate(16, sizeof(PlannedMotion));
     gcode_cmds_queue = xQueueCreate(2, sizeof(GCodeCommand));
     gcode_line_queue = xQueueCreate(2, GCODE_LINE_MAX_LEN);
+    thermal_cmds_queue = xQueueCreate(2, sizeof(thermal_cmd_t));
     
     if (!motion_queue || !gcode_cmds_queue || !gcode_line_queue) {
         ESP_LOGE(TAG_MAIN, "Failed to allocate FreeRTOS Queues!");
@@ -469,6 +476,7 @@ void app_main(void) {
     xTaskCreatePinnedToCore(step_generator_task, "Step_Generator_Task", 4096, NULL, 2, &xStepGenTaskHandle, 1);
     xTaskCreatePinnedToCore(sd_streamer_task, "SD_Streamer_Task", 4096, NULL, 2, &xSDTaskHandle, 0);
     xTaskCreatePinnedToCore(sys_state_machine_task, "Sys_State_Machine_Task", 4096, NULL, 2, &xSysStateTaskHandle, 0);
+    xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
 
     ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");
 }

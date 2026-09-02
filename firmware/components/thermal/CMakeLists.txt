@@ -7,5 +7,6 @@ idf_component_register(
         "adc_filter.c"
     INCLUDE_DIRS 
         "inc"
-    REQUIRES esp_driver_gpio log esp_adc
+        "../../../core/inc"
+    REQUIRES esp_driver_gpio log esp_adc driver
 )

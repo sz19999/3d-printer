@@ -67,19 +67,17 @@ typedef struct {
     uint8_t count;  // holds the number of occupied slots in the buffer
 } RingBuffer;
 
-// metadata for thermal and auxiliary control (separate from motion buffer)
+// metadata
 typedef struct {
-    uint16_t extruder_temp_target;  // 0 = disabled, else 0-500°C
-    uint16_t bed_temp_target;       // 0 = disabled, else 0-150°C
-    uint8_t  fan_speed;             // 0-255 PWM, 0 = off
-    bool     temp_changed;          // flag: temperature setpoint changed
-    bool     fan_changed;           // flag: fan speed changed
-} MotionMetadata;
+    uint32_t cmd_num;
+    uint16_t temp_target;    // in celsius     
+    uint16_t fan_speed;             
+} thermal_cmd_t;
 
 // main motion planner functions
 bool is_motion_command(GCodeCommand* gcode_cmd);
 void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*, PointSteps*, bool*);
-void handle_metadata_command(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
+void handle_metadata_command(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata);
 
 void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion, PointMM*, PointSteps*, bool);
 void compute_junction_velocity(RingBuffer* buffer);
@@ -95,9 +93,8 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
 void set_motion_type(GCodeCommand* gcode_cmd, RingBuffer* buffer);
 
 // handle_metadata_command() aux funcs
-void set_hotend_temp(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
-void set_bed_temp(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
-void set_fan_speed(GCodeCommand* gcode_cmd, MotionMetadata* metadata);
+void set_heater_temp(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata);
+void set_fan_speed(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata);
 
 // create_initial_profile() helper functions
 float limit_velocity(float v_target, float ux, float uy, float uz);
