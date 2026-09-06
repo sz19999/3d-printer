@@ -26,7 +26,7 @@ const char *TAG_MOTION  = "MOTION_BLOCK_TASK";
 const char *TAG_SD      = "SD_STREAMER_TASK";
 const char *TAG_RMT     = "STEP_GENERATOR_TASK";
 const char *TAG_SYS     = "SYS_STATE_TASK";
-//const char *TAG_THERMAL = "THERMAL_TASK";
+const char *TAG_THERMAL = "THERMAL_TASK";
 
 // Global handles for queues
 QueueHandle_t gcode_line_queue = NULL;
@@ -34,7 +34,6 @@ QueueHandle_t gcode_cmds_queue = NULL;
 QueueHandle_t motion_queue = NULL;
 QueueHandle_t gpio_evt_queue = NULL;
 QueueHandle_t thermal_cmds_queue = NULL;
-
 
 TaskHandle_t xParserTaskHandle  = NULL;
 TaskHandle_t xSDTaskHandle      = NULL;
@@ -226,6 +225,124 @@ void motion_planner_task(void *pvParameters) {
         } 
         vTaskDelay(1);
        // vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+void thermal_task(void *pvParameters) {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xPeriod = pdMS_TO_TICKS(100);
+    const float dt_seconds = 0.100f;
+
+    heater_channel_t heaters[2] = {
+        [0] = { .name = "HOTEND", .pwm_chan = PWM_CHANNEL_HOTEND,  .adc_chan = HOTEND_ADC_CHANNEL },
+        [1] = { .name = "BED",    .pwm_chan = PWM_CHANNEL_HEATBED, .adc_chan = BED_ADC_CHANNEL }
+    };
+    dual_adc_t sensors_adc;
+    extern thermistor_config_t THERMISTOR_NTC3950_DEFAULT;
+
+    adc_filter_init(&heaters[HEATER_HOTEND].filter, 0.15f);
+    adc_filter_init(&heaters[HEATER_BED].filter, 0.1f);
+    dual_adc_init(&sensors_adc);
+    
+    ESP_LOGI(TAG_THERMAL, "Thermal Control Task online (Core %d)", xPortGetCoreID());
+
+    while (1) {
+        xEventGroupWaitBits(
+                sys_event_group,
+                SYS_RUNNING_BIT,
+                pdFALSE,        // Don't clear bit on exit (so other tasks stay unblocked)
+                pdTRUE,         // Wait for all bits
+                portMAX_DELAY   // Wait indefinitely
+            );
+
+        vTaskDelayUntil(&xLastWakeTime, xPeriod);
+
+        /* Step 1: Command Processing (Heater & Fan Queue) */
+        thermal_process_command(heaters);
+
+        /* Step 3: Process control and safety loop for each channel independently */
+        for (int i = 0; i < 2; i++) {
+            heater_channel_t *h = &heaters[i];
+
+            /* Read Sensor Signal */
+            uint32_t raw_mv = 0;
+            esp_err_t err = dual_adc_read_channel_mv(&sensors_adc, h->adc_chan, &raw_mv);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG_THERMAL, "[%s] ADC Read Failure! Triggering FAULT.", h->name);
+                h->state = THERMAL_STATE_FAULT;
+            }
+
+            float smooth_mv = adc_filter_update(&h->filter, (float)raw_mv);
+            h->current_temp = thermistor_mv_to_celsius(smooth_mv, &THERMISTOR_NTC3950_DEFAULT);
+
+            float pwm_output = 0.0f;
+
+            /* Execute Control Logic */
+            switch (h->state) {
+                case THERMAL_STATE_PID_RUNNING:
+                    pwm_output = pid_compute(&h->pid, h->current_temp, dt_seconds);
+                    
+                    if (h->current_temp > (h->pid.setpoint + 20.0f)) {
+                        ESP_LOGE(TAG_THERMAL, "[%s] FAULT: Temperature overshot target by >20C!", h->name);
+                        h->state = THERMAL_STATE_FAULT;
+                    }
+                    break;
+
+                case THERMAL_STATE_AUTOTUNE_RUNNING:
+                    pwm_output = autotune_step(&h->autotune, h->current_temp, dt_seconds);
+
+                    if (h->autotune.state == AUTOTUNE_STATE_COMPLETE) {
+                        ESP_LOGI(TAG_THERMAL, "[%s] Autotune complete. Kp: %.2f, Ki: %.2f, Kd: %.2f",
+                                 h->name,
+                                 h->autotune.calculated_gains.kp,
+                                 h->autotune.calculated_gains.ki,
+                                 h->autotune.calculated_gains.kd);
+
+                        pid_init(&h->pid, &h->autotune.calculated_gains, &h->pid.limits);
+                        h->state = THERMAL_STATE_PID_RUNNING;
+
+                    } else if (h->autotune.state == AUTOTUNE_STATE_FAILED) {
+                        ESP_LOGE(TAG_THERMAL, "[%s] Autotune failed or timed out!", h->name);
+                        h->state = THERMAL_STATE_FAULT;
+                    }
+                    break;
+
+                case THERMAL_STATE_OFF:
+                case THERMAL_STATE_FAULT:
+                default:
+                    pwm_output = 0.0f;
+                    break;
+            }
+
+            /* Thermal Runaway Protection Logic */
+            if (pwm_output > 818.0f && h->state != THERMAL_STATE_FAULT) {
+                if (h->runaway_timer_sec == 0.0f) {
+                    h->runaway_start_temp = h->current_temp;
+                }
+                
+                h->runaway_timer_sec += dt_seconds;
+                
+                if (h->runaway_timer_sec >= RUNAWAY_TIME_LIMIT_SEC) {
+                    if ((h->current_temp - h->runaway_start_temp) < RUNAWAY_TEMP_THRESHOLD) {
+                        ESP_LOGE(TAG_THERMAL, "[%s] THERMAL RUNAWAY: Power applied but temp not rising!", h->name);
+                        h->state = THERMAL_STATE_FAULT;
+                    } else {
+                        h->runaway_start_temp = h->current_temp;
+                        h->runaway_timer_sec = 0.0f;
+                    }
+                }
+            } else {
+                h->runaway_start_temp = h->current_temp;
+                h->runaway_timer_sec = 0.0f;
+            }
+
+            /* Drive Hardware PWM Output */
+            if (h->state == THERMAL_STATE_FAULT) {
+                mosfet_set_duty_raw(0.0f, h->pwm_chan);
+            } else {
+                mosfet_set_duty_raw(pwm_output, h->pwm_chan);
+            }
+        }
     }
 }
 
@@ -514,7 +631,7 @@ void app_main(void) {
     xTaskCreatePinnedToCore(step_generator_task, "Step_Generator_Task", 4096, NULL, 2, &xStepGenTaskHandle, 1);
     xTaskCreatePinnedToCore(sd_streamer_task, "SD_Streamer_Task", 4096, NULL, 2, &xSDTaskHandle, 0);
     xTaskCreatePinnedToCore(sys_state_machine_task, "Sys_State_Machine_Task", 4096, NULL, 2, &xSysStateTaskHandle, 0);
-    //xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
+    xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
 
     ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");
 }
