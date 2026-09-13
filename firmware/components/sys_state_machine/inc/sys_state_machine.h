@@ -2,10 +2,11 @@
 #define SYS_STATE_MACHINE_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
-#define NUM_MENU_ITEMS   3           // 3 options in menu
-#define MENU_TIMEOUT 1000000 * 5 // 5sec
-#define BTN_PIN      GPIO_NUM_36    // 48 is the original pin
+#define NUM_MENU_ITEMS   4           
+#define NUM_MAIN_ITEMS   2
+#define BTN_PIN          GPIO_NUM_36    // 48 is the original pin
 
 typedef enum {
     EVENT_NONE,

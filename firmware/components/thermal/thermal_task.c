@@ -15,7 +15,7 @@ void thermal_process_command(heater_channel_t heaters[]) {
     thermal_cmd_t cmd;
 
     /* Drain all pending commands in the queue non-blockingly */
-    while (xQueueReceive(thermal_cmds_queue, &cmd, 0) == pdTRUE) {
+    if (xQueueReceive(thermal_cmds_queue, &cmd, 0) == pdTRUE) {
         
         /* 1. Handle Fan Commands (M106 / M107) */
         if (cmd.cmd_num == 106 || cmd.cmd_num == 107) {
@@ -30,7 +30,7 @@ void thermal_process_command(heater_channel_t heaters[]) {
 
             mosfet_set_duty_raw(pwm_duty, PWM_CHANNEL_PART_FAN);
             ESP_LOGI(TAG_THERMAL, "[PART_FAN] Duty set to %.1f", pwm_duty);
-            continue; // Skip heater dispatch logic
+            return; // Skip heater dispatch logic
         }
 
         /* 2. Determine targeted heater channel */
@@ -47,7 +47,7 @@ void thermal_process_command(heater_channel_t heaters[]) {
         /* Reject commands if channel is in thermal FAULT */
         if (h->state == THERMAL_STATE_FAULT && cmd.temp_target > 0.0f) {
             ESP_LOGW(TAG_THERMAL, "[%s] Command rejected: Channel in FAULT!", h->name);
-            continue;
+            return;
         }
 
         /* 3. Dispatch Heater Commands */

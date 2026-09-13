@@ -15,6 +15,9 @@
 #include "step_generator.h"
 #include "sys_state_machine.h"
 #include "thermal_task.h"
+#include "user_interface.h"
+#include "i2c_oled.h"
+
 
 #define GCODE_LINE_MAX_LEN 128
 #define SYS_RUNNING_BIT (1 << 0)
@@ -27,6 +30,7 @@ const char *TAG_SD      = "SD_STREAMER_TASK";
 const char *TAG_RMT     = "STEP_GENERATOR_TASK";
 const char *TAG_SYS     = "SYS_STATE_TASK";
 const char *TAG_THERMAL = "THERMAL_TASK";
+const char* TAG_UI   = "UI_TASK"; 
 
 // Global handles for queues
 QueueHandle_t gcode_line_queue = NULL;
@@ -34,6 +38,7 @@ QueueHandle_t gcode_cmds_queue = NULL;
 QueueHandle_t motion_queue = NULL;
 QueueHandle_t gpio_evt_queue = NULL;
 QueueHandle_t thermal_cmds_queue = NULL;
+QueueHandle_t ui_queue       = NULL;
 
 TaskHandle_t xParserTaskHandle  = NULL;
 TaskHandle_t xSDTaskHandle      = NULL;
@@ -41,6 +46,7 @@ TaskHandle_t xPlannerTaskHandle = NULL;
 TaskHandle_t xStepGenTaskHandle = NULL;
 TaskHandle_t xSysStateTaskHandle = NULL;
 TaskHandle_t xThermalTaskHandle = NULL;
+TaskHandle_t xUITaskHandle       = NULL;
 
 EventGroupHandle_t sys_event_group;
 
@@ -379,15 +385,9 @@ void step_generator_task(void *pvParameters) {
         gpio_set_direction(dir_pins[i], GPIO_MODE_OUTPUT);
     }
 
-    while (1) {
-        xEventGroupWaitBits(
-                sys_event_group,
-                SYS_RUNNING_BIT,
-                pdFALSE,        // Don't clear bit on exit (so other tasks stay unblocked)
-                pdTRUE,         // Wait for all bits
-                portMAX_DELAY   // Wait indefinitely
-            );
+    vTaskSuspend(xStepGenTaskHandle);
 
+    while (1) {
         // wait for next motion block from motion planner queue
         if (xQueueReceive(motion_queue, &motion, portMAX_DELAY) == pdTRUE) {
             bool abort_triggered = false;
@@ -570,42 +570,97 @@ void step_generator_task(void *pvParameters) {
 
 void sys_state_machine_task(void *pvParameters) {
     ESP_LOGI(TAG_SYS, "Task started successfully on core %d", xPortGetCoreID());
-
-    // Broadcast ready signal to all unblocked tasks simultaneously
-    xEventGroupSetBits(sys_event_group, SYS_RUNNING_BIT);
-
+    
     init_button_interrupt();
-    int selection = 0;
 
+    bool first_run = true;
+    int selection = 0;
+    ui_data_t ui_data_old = {0};
+    ui_data_t ui_data     = {0};
+    ui_data.screen = MAIN_SCREEN;
+    
     while(1) {
         ButtonEvent_t event = process_button_edges();
+        
+        if (event == EVENT_NONE) {
+            if (first_run) {
+                if (xQueueSend(ui_queue, &ui_data, pdMS_TO_TICKS(100)) == pdPASS) {
+                    ESP_LOGI(TAG_SYS, "Dispatched UI data to turn the display on!");
+                }
+                first_run = false;
+            }
+            else {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
+        }
+
+        ui_data.button_event = event;
 
         switch (event) {
             case EVENT_SINGLE_CLICK:
-                selection = (selection + 1) % NUM_MENU_ITEMS;
-                //update_display(selection);
+                if (ui_data.screen == MAIN_SCREEN) selection = (selection + 1) % NUM_MAIN_ITEMS;
+                else if (ui_data.screen == MENU_SCREEN) selection = (selection + 1) % NUM_MENU_ITEMS;
+
                 ESP_LOGI(TAG_SYS, "Single Click!");
                 break;
 
             case EVENT_DOUBLE_CLICK:
-                selection = (selection - 1 + NUM_MENU_ITEMS) % NUM_MENU_ITEMS;
-                //update_display(selection);
+                if (ui_data.screen == MAIN_SCREEN) selection = (NUM_MAIN_ITEMS + selection - 1) % NUM_MAIN_ITEMS;
+                else selection = (NUM_MENU_ITEMS + selection - 1) % NUM_MENU_ITEMS;
                 ESP_LOGI(TAG_SYS, "Double Click!");
                 break;
 
             case EVENT_LONG_PRESS:
-                //if (menu_items[selection].action) {
-                    //menu_items[selection].action(); // Execute function pointer
-                //}
+                if (ui_data.screen == MAIN_SCREEN) handle_main_selection(&selection, &ui_data);
+                else if (ui_data.screen == MENU_SCREEN) handle_menu_selection(&selection, &ui_data);
+                else handle_status_screen_selection(&selection, &ui_data);
                 ESP_LOGI(TAG_SYS, "Long Press!");
                 break;
 
-            case EVENT_NONE:
             default:
                 break;
         }
 
-        vTaskDelay(1); // Cooperative yield for parallel tasks
+        ui_data.selection = selection;
+
+        if (!ui_isEqual(&ui_data, &ui_data_old)) {
+            if (xQueueSend(ui_queue, &ui_data, pdMS_TO_TICKS(100)) == pdPASS) {
+                ESP_LOGI(TAG_SYS, "Dispatched UI Data!");
+                ui_data_old = ui_data;
+            } else {
+                ESP_LOGW(TAG_SYS, "UI Queue Full - Dropped Frame");
+            }
+        }
+    }
+}
+
+void ui_task(void *pvParameters) {
+    ESP_LOGI(TAG_UI, "Task started successfully on core %d", xPortGetCoreID());
+    
+    oled_init();
+
+    ui_data_t ui_data;
+    while(1) {
+        if (xQueueReceive(ui_queue, &ui_data, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG_UI, "Received UI data!");
+            
+            switch (ui_data.screen) {
+                case MAIN_SCREEN:
+                    ui_draw_main_screen();
+                    oled_highlight_line(2 + ui_data.selection); // the +2 offset starts highlighting the third row
+                    break;
+                case MENU_SCREEN:
+                    ui_draw_menu_screen();
+                    oled_highlight_line(2 + ui_data.selection);
+                    break;
+                default:
+                    break;
+            }
+
+            // Only flush OLED when content changes
+            oled_flush();
+        }
     }
 }
 
@@ -618,6 +673,8 @@ void app_main(void) {
     gcode_cmds_queue = xQueueCreate(2, sizeof(GCodeCommand));
     gcode_line_queue = xQueueCreate(2, GCODE_LINE_MAX_LEN);
     thermal_cmds_queue = xQueueCreate(2, sizeof(thermal_cmd_t));
+    ui_queue = xQueueCreate(5, sizeof(ui_data_t));
+    gpio_evt_queue = xQueueCreate(10, sizeof(ButtonEdge_t));
     
     if (!motion_queue || !gcode_cmds_queue || !gcode_line_queue) {
         ESP_LOGE(TAG_MAIN, "Failed to allocate FreeRTOS Queues!");
@@ -632,6 +689,7 @@ void app_main(void) {
     xTaskCreatePinnedToCore(sd_streamer_task, "SD_Streamer_Task", 4096, NULL, 2, &xSDTaskHandle, 0);
     xTaskCreatePinnedToCore(sys_state_machine_task, "Sys_State_Machine_Task", 4096, NULL, 2, &xSysStateTaskHandle, 0);
     xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
+    xTaskCreatePinnedToCore(ui_task, "UI_Task", 4096, NULL, 2, &xUITaskHandle, 0);
 
     ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");
 }

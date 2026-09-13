@@ -7,7 +7,6 @@
 #include "esp_log.h"
 
 extern QueueHandle_t gpio_evt_queue;
-extern const char *TAG_SYS;
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     ButtonEdge_t edge;
@@ -31,9 +30,9 @@ void init_button_interrupt(void) {
     };
     gpio_config(&io_conf);
 
-    gpio_evt_queue = xQueueCreate(10, sizeof(ButtonEdge_t));
     gpio_install_isr_service(0);
     gpio_isr_handler_add(BTN_PIN, gpio_isr_handler, NULL);
+    gpio_intr_enable(BTN_PIN);
 }
 
 ButtonEvent_t process_button_edges(void) {
