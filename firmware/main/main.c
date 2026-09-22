@@ -17,6 +17,7 @@
 #include "thermal_task.h"
 #include "user_interface.h"
 #include "i2c_oled.h"
+#include "tmc2209.h"
 
 
 #define GCODE_LINE_MAX_LEN 128
@@ -213,7 +214,7 @@ void motion_planner_task(void *pvParameters) {
             motion = front(&buffer);
             if (motion != NULL) {
                 
-                if (xQueueSend(motion_queue, motion, pdMS_TO_TICKS(10)) == pdPASS) {
+                if (xQueueSend(motion_queue, motion, portMAX_DELAY) == pdPASS) {
                     ESP_LOGI(TAG_PLANNER, "Buffer front returned a motion block.");
                     print_motion_block(motion);
 
@@ -372,6 +373,13 @@ void step_generator_task(void *pvParameters) {
 
     // initialize axes endstop switches
     init_endstops();
+
+    // bring up TMC2209 UART bus and configure each driver (current, microstepping)
+    tmc2209_init_uart();
+    setup_tmc2209(TMC2209_X_ADDR);
+    setup_tmc2209(TMC2209_Y_ADDR);
+    setup_tmc2209(TMC2209_Z_ADDR);
+    setup_tmc2209(TMC2209_E_ADDR);
 
     // initialize RMT Hardware Channels
     init_stepper_rmt_channels(&sys, step_pins);
@@ -688,7 +696,7 @@ void app_main(void) {
     xTaskCreatePinnedToCore(step_generator_task, "Step_Generator_Task", 4096, NULL, 2, &xStepGenTaskHandle, 1);
     xTaskCreatePinnedToCore(sd_streamer_task, "SD_Streamer_Task", 4096, NULL, 2, &xSDTaskHandle, 0);
     xTaskCreatePinnedToCore(sys_state_machine_task, "Sys_State_Machine_Task", 4096, NULL, 2, &xSysStateTaskHandle, 0);
-    xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
+    //xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
     xTaskCreatePinnedToCore(ui_task, "UI_Task", 4096, NULL, 2, &xUITaskHandle, 0);
 
     ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");

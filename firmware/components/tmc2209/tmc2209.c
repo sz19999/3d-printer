@@ -34,9 +34,10 @@ void tmc2209_init_uart(void) {
 void setup_tmc2209(uint8_t driver_addr) {
    bool success = true;
 
-    // 1. Enable UART control by setting pdn_disable bit (Bit 6) in GCONF
+    // 1. Enable UART control (pdn_disable, Bit 6) and let CHOPCONF's MRES field
+    //    set microstep resolution instead of the MS1/MS2 pin straps (mstep_reg_select, Bit 7)
     ESP_LOGI(TAG, "Configuring GCONF for driver 0x%02X...", driver_addr);
-    success = tmc2209_write_register(driver_addr, TMC2209_REG_GCONF, 0x00000040);
+    success = tmc2209_write_register(driver_addr, TMC2209_REG_GCONF, 0x000000C0);
 
     // 2. Set current limits: IHOLDDELAY = 6, IRUN = 20 (~0.8A RMS), IHOLD = 8 (~0.3A RMS)
     ESP_LOGI(TAG, "Setting run/hold current for driver 0x%02X...", driver_addr);
