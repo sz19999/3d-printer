@@ -12,19 +12,19 @@
 #include "hal/gpio_ll.h"
 #include "soc/rmt_struct.h"
 
-#define X_STEP_PIN          GPIO_NUM_47 // 47 (the commented pins are the original pins)      
-#define Y_STEP_PIN          GPIO_NUM_38 // 38
-#define Z_STEP_PIN          GPIO_NUM_40  // 40    
-#define E_STEP_PIN          GPIO_NUM_42 // 42
+#define X_STEP_PIN          GPIO_NUM_47   
+#define Y_STEP_PIN          GPIO_NUM_39
+#define Z_STEP_PIN          GPIO_NUM_40   
+#define E_STEP_PIN          GPIO_NUM_2
 
 #define X_DIR_PIN           GPIO_NUM_21 
-#define Y_DIR_PIN           GPIO_NUM_39 // 39
-#define Z_DIR_PIN           GPIO_NUM_41 // 41
-#define E_DIR_PIN           GPIO_NUM_2
+#define Y_DIR_PIN           GPIO_NUM_38 
+#define Z_DIR_PIN           GPIO_NUM_41 
+#define E_DIR_PIN           GPIO_NUM_42
 
 #define ENDSTOP_X_GPIO      GPIO_NUM_1
 #define ENDSTOP_Y_GPIO      GPIO_NUM_14
-#define ENDSTOP_Z_GPIO      GPIO_NUM_48  // was 36: collided with BTN_PIN and is an octal-PSRAM pin
+#define ENDSTOP_Z_GPIO      GPIO_NUM_3  
 
 #define RMT_CHANNEL_X       0
 #define RMT_CHANNEL_Y       1

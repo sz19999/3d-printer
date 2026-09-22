@@ -6,7 +6,7 @@
 
 #define NUM_MENU_ITEMS   4           
 #define NUM_MAIN_ITEMS   2
-#define BTN_PIN          GPIO_NUM_36    // 48 is the original pin
+#define BTN_PIN          GPIO_NUM_48    // 48 is the original pin
 
 typedef enum {
     EVENT_NONE,
