@@ -9,24 +9,24 @@
 #define EFF_EX_GEAR_D  11   // need to verify the extruder gear diameter   
 #define PI             3.14159265f
 
-#define STEPS_PER_MM_BELT  ((float)((360  * MICROSTEPS) / (STEP_ANGLE_DEG * PULLEY_TEETH * BELT_PITCH)))
-#define STEPS_PER_MM_SCREW ((float)((360  * MICROSTEPS) / (STEP_ANGLE_DEG * SCREW_LEAD)))
-#define STEPS_PER_MM_GEAR  ((float)((360 * MICROSTEPS) / (EFF_EX_GEAR_D * PI)))
+#define STEPS_PER_MM_BELT  (((360.0f  * MICROSTEPS) / (STEP_ANGLE_DEG * PULLEY_TEETH * BELT_PITCH)))
+#define STEPS_PER_MM_SCREW (((360.0f  * MICROSTEPS) / (STEP_ANGLE_DEG * SCREW_LEAD)))
+#define STEPS_PER_MM_GEAR  (((360.0f * MICROSTEPS) / (EFF_EX_GEAR_D * PI)))
 
 #define MAX_VELOCITY_X  3500.0f / 60.0f  // 3500 mm/min
 #define MAX_VELOCITY_Y  3500.0f / 60.0f
 #define MAX_VELOCITY_Z  3500.0f / 60.0f
 #define MAX_VELOCITY_E  3500.0f / 60.0f
 
-#define MAX_ACCELERATION_X  100.0f // need to verify each acceleration constant and velocity
-#define MAX_ACCELERATION_Y  100.0f
+#define MAX_ACCELERATION_X  500.0f // need to verify each acceleration constant and velocity
+#define MAX_ACCELERATION_Y  500.0f
 #define MAX_ACCELERATION_Z  100.0f
-#define MAX_ACCELERATION_E  100.0f
+#define MAX_ACCELERATION_E  500.0f
 
 #define JUNCTION_DEVIATION  0.02f // 0.02mm - need to test
 
-#define MAX_DISTANCE_X 150.0f
-#define MAX_DISTANCE_Y 150.0f
-#define MAX_DISTANCE_Z 300.0f
+#define MAX_DISTANCE_X 160.0f
+#define MAX_DISTANCE_Y 160.0f
+#define MAX_DISTANCE_Z 160.0f
 
 #endif

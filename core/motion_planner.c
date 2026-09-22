@@ -151,7 +151,7 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
 
     // home X axis
     memset(&gcode_cmd, 0, sizeof(GCodeCommand));
-    sprintf(move_cmd, "G0 X-%.2f F600", MAX_DISTANCE_X);
+    sprintf(move_cmd, "G0 X-%.2f F600", MAX_DISTANCE_X * 2);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
@@ -164,7 +164,7 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
 
     // home Y axis
     memset(&gcode_cmd, 0, sizeof(GCodeCommand));
-    sprintf(move_cmd, "G0 Y-%.2f F600", MAX_DISTANCE_Y);
+    sprintf(move_cmd, "G0 Y-%.2f F600", MAX_DISTANCE_Y * 2);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
@@ -177,7 +177,7 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
 
     // home Z axis
     memset(&gcode_cmd, 0, sizeof(GCodeCommand));
-    sprintf(move_cmd, "G0 Z-%.2f F600", MAX_DISTANCE_Z);
+    sprintf(move_cmd, "G0 Z-%.2f F600", MAX_DISTANCE_Z * 2);
     parse_command(move_cmd, &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
@@ -276,6 +276,12 @@ void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion, Poin
     // update target coordinate in millimeters
     PointMM target_mm = *current_mm;
     update_target_coordinate(gcode_cmd, &target_mm, absolute_mode);
+
+    // clamp to the physical axis travel limits; homing moves are exempt --
+    // they intentionally overtravel toward the endstop
+    if (motion->motion_mode != MOTION_MODE_HOMING) {
+        clamp_target_to_axis_limits(&target_mm);
+    }
 
     // compute deltas in mm
     float deltas_mm[4];     // holds dx, dy, dz, de
@@ -715,6 +721,23 @@ void update_target_coordinate(GCodeCommand* gcode_cmd, PointMM* target_mm, bool 
     if (gcode_cmd->has_Y) target_mm->y = (absolute_mode) ? gcode_cmd->Y : target_mm->y + gcode_cmd->Y;
     if (gcode_cmd->has_Z) target_mm->z = (absolute_mode) ? gcode_cmd->Z : target_mm->z + gcode_cmd->Z;
     if (gcode_cmd->has_E) target_mm->e = (absolute_mode) ? gcode_cmd->E : target_mm->e + gcode_cmd->E;
+}
+
+/*
+    clamps a target position to the printer's physical travel limits
+    ([0, MAX_DISTANCE_*]) so a move can never command the head past the
+    bed/frame extents. not applied to homing moves, which intentionally
+    overtravel toward the endstop and are stopped by the endstop trip instead.
+*/
+void clamp_target_to_axis_limits(PointMM* target_mm) {
+    if (target_mm->x < 0.0f) target_mm->x = 0.0f;
+    else if (target_mm->x > MAX_DISTANCE_X) target_mm->x = MAX_DISTANCE_X;
+
+    if (target_mm->y < 0.0f) target_mm->y = 0.0f;
+    else if (target_mm->y > MAX_DISTANCE_Y) target_mm->y = MAX_DISTANCE_Y;
+
+    if (target_mm->z < 0.0f) target_mm->z = 0.0f;
+    else if (target_mm->z > MAX_DISTANCE_Z) target_mm->z = MAX_DISTANCE_Z;
 }
 
 void compute_steps(PlannedMotion* motion, PointSteps* target_steps, PointSteps* current_steps) {
