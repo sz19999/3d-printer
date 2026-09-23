@@ -7,6 +7,7 @@
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "driver/gpio.h"
 
 #include "gcode_parser.h"
@@ -353,6 +354,21 @@ void thermal_task(void *pvParameters) {
     }
 }
 
+// Endstop input pin per axis id (X, Y, Z), for level checks from the step task.
+static const gpio_num_t k_endstop_pins[3] = { ENDSTOP_X_GPIO, ENDSTOP_Y_GPIO, ENDSTOP_Z_GPIO };
+
+// True only if the (active-LOW) endstop reads pressed on every one of 3 samples
+// taken 20 us apart, so a single coupled-noise spike can't fake a touch.
+// Needed because the endstop interrupt is edge-triggered: if the ISR rejects the
+// first edge as bounce, a switch that stays pressed never produces another edge.
+static bool endstop_is_pressed(uint8_t axis) {
+    for (int i = 0; i < 3; i++) {
+        if (gpio_get_level(k_endstop_pins[axis]) != 0) return false;
+        esp_rom_delay_us(20);
+    }
+    return true;
+}
+
 void step_generator_task(void *pvParameters) {
     const uint8_t step_pins[NUM_AXES] = {X_STEP_PIN, Y_STEP_PIN, Z_STEP_PIN, E_STEP_PIN};
     const uint8_t dir_pins[NUM_AXES]  = {X_DIR_PIN,  Y_DIR_PIN,  Z_DIR_PIN,  E_DIR_PIN};
@@ -426,6 +442,14 @@ void step_generator_task(void *pvParameters) {
             }
             for (uint8_t a = 0; a < 3; a++) {
                 endstop_set_armed(a, homing_approach && a == approach_axis);
+            }
+
+            // Explicit case: the carriage is already sitting on its switch when the
+            // approach starts. Skip the approach; the next queued block is the back-off.
+            if (homing_approach && endstop_is_pressed(approach_axis)) {
+                ESP_LOGW(TAG_RMT, "Axis %d already on its endstop, skipping approach", approach_axis);
+                endstop_set_armed(approach_axis, false);
+                continue;
             }
 
             // Flush notification bits latched since the previous block (boot-time
@@ -502,6 +526,14 @@ void step_generator_task(void *pvParameters) {
                     // after that point would be missed. Once per refill is
                     // frequent enough for homing feedrates.
                     if (homing_approach) {
+                        // Explicit case: the ISR dropped the touch edge as bounce,
+                        // but the switch is now held pressed. Treat it as the touch.
+                        if (endstop_is_pressed(approach_axis)) {
+                            ESP_LOGW(TAG_RMT, "Axis %d touch caught by level check", approach_axis);
+                            notify_value = (1u << approach_axis);
+                            abort_triggered = true;
+                            break;
+                        }
                         endstop_set_armed(approach_axis, true);
                     }
 
@@ -537,9 +569,21 @@ void step_generator_task(void *pvParameters) {
                             break;
                         }
                         active_transports--;
+
+                        // Same level check as the streaming loop: a touch whose
+                        // edge was rejected as bounce must still stop the approach.
+                        if (homing_approach) {
+                            if (endstop_is_pressed(approach_axis)) {
+                                ESP_LOGW(TAG_RMT, "Axis %d touch caught by level check (drain)", approach_axis);
+                                notify_value = (1u << approach_axis);
+                                abort_triggered = true;
+                                break;
+                            }
+                            endstop_set_armed(approach_axis, true);
+                        }
                     }
                 }
-            } 
+            }
             
 
             if (abort_triggered) {
@@ -552,6 +596,23 @@ void step_generator_task(void *pvParameters) {
                 // The endstop ISR stopped only the tripped channel via rmt_ll and
                 // left a queued ping-pong bank behind; the other channels still
                 // hold this block's transactions. Cycle all of them clean.
+                //
+                // rmt_enable() restarts any transaction still queued, and the copy
+                // encoder reads a queued buffer only when its transaction starts.
+                // Overwrite both banks with step-free idle symbols first so the
+                // leftover bank can't push the carriage further into the switch.
+                // Durations must be nonzero: RMT treats 0 as "hold forever".
+                const rmt_symbol_word_t idle = {
+                    .duration0 = 1, .level0 = 0, .duration1 = 1, .level1 = 0
+                };
+                for (int b = 0; b < 2; b++) {
+                    for (int a = 0; a < NUM_AXES; a++) {
+                        for (int i = 0; i < SYMBOLS_PER_BLOCK; i++) {
+                            ping_pong_buff[b][a][i] = idle;
+                        }
+                    }
+                }
+
                 for (int axis = 0; axis < NUM_AXES; axis++) {
                     rmt_disable(sys.tx_channels[axis]);
                     rmt_enable(sys.tx_channels[axis]);
