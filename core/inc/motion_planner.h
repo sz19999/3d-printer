@@ -48,6 +48,8 @@ typedef struct {
     uint32_t cruise_steps;
 
     motion_mode_t motion_mode;  // printing/homing
+
+    float end_mm[3];            // X, Y, Z position (mm) once this block completes (for the display)
 } PlannedMotion;
 
 typedef struct 
@@ -70,8 +72,9 @@ typedef struct {
 // metadata
 typedef struct {
     uint32_t cmd_num;
-    uint16_t temp_target;    // in celsius     
-    uint16_t fan_speed;             
+    uint16_t temp_target;    // in celsius
+    uint16_t fan_speed;
+    uint32_t seq;            // stamped by the planner; the thermal task publishes the last applied seq
 } thermal_cmd_t;
 
 // main motion planner functions

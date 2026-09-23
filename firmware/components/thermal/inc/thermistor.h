@@ -11,6 +11,8 @@ typedef struct {
     float t0_k;         /* 25C in Kelvin (298.15f) */
 } thermistor_config_t;
 
+extern const thermistor_config_t THERMISTOR_NTC3950_DEFAULT;
+
 
 float thermistor_mv_to_celsius(uint32_t v_out_mv, const thermistor_config_t *config);
 

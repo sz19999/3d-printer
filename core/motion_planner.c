@@ -283,6 +283,11 @@ void create_initial_profile(GCodeCommand* gcode_cmd, PlannedMotion* motion, Poin
         clamp_target_to_axis_limits(&target_mm);
     }
 
+    // record where this block ends, so the display can show live position
+    motion->end_mm[0] = target_mm.x;
+    motion->end_mm[1] = target_mm.y;
+    motion->end_mm[2] = target_mm.z;
+
     // compute deltas in mm
     float deltas_mm[4];     // holds dx, dy, dz, de
     compute_deltas_mm(deltas_mm ,&target_mm, current_mm);
