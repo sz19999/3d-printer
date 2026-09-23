@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <dirent.h>
 #include <string.h>
+#include <math.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -52,6 +53,16 @@ TaskHandle_t xUITaskHandle       = NULL;
 
 EventGroupHandle_t sys_event_group;
 
+// Live status for the OLED status screen. Each variable has exactly one writer
+// task; the UI task only reads them. 32-bit loads/stores are atomic on the S3.
+static volatile long  g_file_size        = 0;      // SD streamer
+static volatile long  g_file_bytes_read  = 0;      // SD streamer
+static volatile bool  g_file_done        = false;  // SD streamer
+static volatile bool  g_waiting_for_heat = false;  // planner (inside M109/M190)
+static volatile bool  g_block_executing  = false;  // step generator
+static volatile bool  g_homing_block     = false;  // step generator
+static volatile float g_pos_mm[3]        = {0};    // step generator: X/Y/Z after last finished block
+
 void print_motion_block(const PlannedMotion* block);
 
 void sd_streamer_task(void *pvParameters) {
@@ -78,7 +89,15 @@ void sd_streamer_task(void *pvParameters) {
     }
     else {
         ESP_LOGI(TAG_SD, "Opened gcode file scuccessfuly!");
-        
+
+        // file size for the progress display
+        if (fseek(f, 0, SEEK_END) == 0) {
+            g_file_size = ftell(f);
+            fseek(f, 0, SEEK_SET);
+        }
+        g_file_bytes_read = 0;
+        g_file_done = false;
+
         while(1) {
             xEventGroupWaitBits(
                 sys_event_group,
@@ -93,10 +112,13 @@ void sd_streamer_task(void *pvParameters) {
             // read gcode line
             if (fgets(gcode_line, sizeof(gcode_line), f) == NULL) {
                 ESP_LOGI(TAG_SD, "Reached to the end of the gcode file!");
+                g_file_done = true;
                 fclose(f);
                 vTaskDelay(pdMS_TO_TICKS(1000000)); 
                 continue;
             }
+
+            g_file_bytes_read += strlen(gcode_line);
 
             // dispatch gcode line
             if (xQueueSend(gcode_line_queue, gcode_line, portMAX_DELAY) == pdPASS) { // Wait indefinitely if queue is full
@@ -153,7 +175,64 @@ void parser_task(void *pvParameters) {
     }
 }
 
+// Send every block still held in the lookahead buffer to the step generator.
+static void flush_planner_buffer(RingBuffer *buffer) {
+    PlannedMotion *m;
+    while ((m = front(buffer)) != NULL) {
+        if (xQueueSend(motion_queue, m, portMAX_DELAY) == pdPASS) {
+            print_motion_block(m);
+            pop(buffer);
+        }
+    }
+}
+
+// Block until the heater reports "at target" for the command stamped `seq`.
+// Returns early on a thermal fault or when the print is aborted.
+static void planner_wait_for_temperature(heater_source_t heater, uint32_t seq) {
+    const char *name = (heater == HEATER_BED) ? "BED" : "HOTEND";
+    ESP_LOGI(TAG_PLANNER, "Waiting for %s to reach target...", name);
+
+    g_waiting_for_heat = true;   // shown as HEATING on the display
+
+    TickType_t last_log = xTaskGetTickCount();
+    while (1) {
+        if (thermal_fault_active()) {
+            ESP_LOGE(TAG_PLANNER, "Stopped waiting for %s: thermal fault.", name);
+            break;
+        }
+        if ((xEventGroupGetBits(sys_event_group) & SYS_RUNNING_BIT) == 0) {
+            ESP_LOGW(TAG_PLANNER, "Stopped waiting for %s: print aborted.", name);
+            break;
+        }
+        // Only trust "at target" once the thermal task has applied THIS command.
+        if ((int32_t)(thermal_last_applied_seq() - seq) >= 0 && thermal_at_target(heater)) {
+            ESP_LOGI(TAG_PLANNER, "%s at target (%.1f C). Resuming.", name, thermal_get_temp(heater));
+            break;
+        }
+        if (xTaskGetTickCount() - last_log >= pdMS_TO_TICKS(5000)) {
+            last_log = xTaskGetTickCount();
+            ESP_LOGI(TAG_PLANNER, "...%s at %.1f C, still heating", name, thermal_get_temp(heater));
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+
+    g_waiting_for_heat = false;
+}
+
+// Same effect as the UI's Abort, triggered by a latched thermal fault.
+static void abort_print_on_thermal_fault(RingBuffer *buffer) {
+    ESP_LOGE(TAG_PLANNER, "THERMAL FAULT - aborting print.");
+    xEventGroupClearBits(sys_event_group, SYS_RUNNING_BIT);
+    vTaskSuspend(xStepGenTaskHandle);
+    xQueueReset(gcode_line_queue);
+    xQueueReset(gcode_cmds_queue);
+    xQueueReset(motion_queue);
+    xQueueReset(thermal_cmds_queue);
+    init_buffer(buffer);
+}
+
 void motion_planner_task(void *pvParameters) {
+    uint32_t thermal_seq = 0;
     GCodeCommand gcode_cmd;
     PlannedMotion* motion = NULL;
     RingBuffer buffer;
@@ -174,6 +253,13 @@ void motion_planner_task(void *pvParameters) {
                 pdTRUE,         // Wait for all bits
                 portMAX_DELAY   // Wait indefinitely
             );
+
+        // A latched thermal fault stops the print; never keep moving with dead heaters.
+        if (thermal_fault_active()) {
+            abort_print_on_thermal_fault(&buffer);
+            planner_state = PLANNER_STATE_BUFFERING;
+            continue;   // the cleared running bit parks this task at the wait above
+        }
 
         memset(&gcode_cmd, 0, sizeof(GCodeCommand)); // reset gcode cmd holder
 
@@ -196,8 +282,30 @@ void motion_planner_task(void *pvParameters) {
                 memset(&metadata, 0, sizeof(thermal_cmd_t));
                 handle_metadata_command(&gcode_cmd, &metadata);
 
-                if (xQueueSend(thermal_cmds_queue, thermal_cmds_queue, portMAX_DELAY) == pdPASS) {
-                    ESP_LOGI(TAG_SD, "Dispatched thermal command to thermal_cmds_queue.");
+                if (metadata.cmd_num == 0) {
+                    // Not a heater/fan command we handle (e.g. M82, M84): nothing to send.
+                } else {
+                    metadata.seq = ++thermal_seq;
+
+                    // The thermal task drains the whole queue every 100 ms, so a
+                    // bounded wait here never stalls the pipeline for long.
+                    if (xQueueSend(thermal_cmds_queue, &metadata, pdMS_TO_TICKS(1000)) == pdPASS) {
+                        ESP_LOGI(TAG_PLANNER, "Dispatched M%lu to thermal_cmds_queue.",
+                                 (unsigned long)metadata.cmd_num);
+                    } else {
+                        ESP_LOGE(TAG_PLANNER, "thermal_cmds_queue full for 1 s, dropped M%lu!",
+                                 (unsigned long)metadata.cmd_num);
+                    }
+
+                    // M109 / M190: block the G-code stream until the heater is at target.
+                    if ((metadata.cmd_num == 109 || metadata.cmd_num == 190) && metadata.temp_target > 0) {
+                        // Moves planned before the wait must run now, not after heating.
+                        flush_planner_buffer(&buffer);
+                        planner_state = PLANNER_STATE_BUFFERING;
+
+                        heater_source_t heater = (metadata.cmd_num == 190) ? HEATER_BED : HEATER_HOTEND;
+                        planner_wait_for_temperature(heater, metadata.seq);
+                    }
                 }
             }
         }
@@ -246,27 +354,41 @@ void thermal_task(void *pvParameters) {
         [1] = { .name = "BED",    .pwm_chan = PWM_CHANNEL_HEATBED, .adc_chan = BED_ADC_CHANNEL }
     };
     dual_adc_t sensors_adc;
-    extern thermistor_config_t THERMISTOR_NTC3950_DEFAULT;
+    uint32_t log_ticks = 0;
 
+    thermal_heaters_init(heaters);
     adc_filter_init(&heaters[HEATER_HOTEND].filter, 0.15f);
     adc_filter_init(&heaters[HEATER_BED].filter, 0.1f);
-    dual_adc_init(&sensors_adc);
-    
+    if (dual_adc_init(&sensors_adc) != ESP_OK) {
+        ESP_LOGE(TAG_THERMAL, "ADC init failed - heaters disabled.");
+        thermal_set_fault();
+    }
+
     ESP_LOGI(TAG_THERMAL, "Thermal Control Task online (Core %d)", xPortGetCoreID());
 
+    // This loop runs ALWAYS, independent of SYS_RUNNING_BIT. It used to block on
+    // that bit, which on Abort froze the heaters at their last PWM duty with no
+    // control or protection. Safety checks must never stop running.
     while (1) {
-        xEventGroupWaitBits(
-                sys_event_group,
-                SYS_RUNNING_BIT,
-                pdFALSE,        // Don't clear bit on exit (so other tasks stay unblocked)
-                pdTRUE,         // Wait for all bits
-                portMAX_DELAY   // Wait indefinitely
-            );
-
         vTaskDelayUntil(&xLastWakeTime, xPeriod);
 
         /* Step 1: Command Processing (Heater & Fan Queue) */
         thermal_process_command(heaters);
+
+        /* Step 2: Explicit rule - heaters may only run while a print is running.
+           Abort clears SYS_RUNNING_BIT; Pause keeps it set so the hotend stays warm. */
+        bool print_running = (xEventGroupGetBits(sys_event_group) & SYS_RUNNING_BIT) != 0;
+        if (!print_running) {
+            for (int i = 0; i < 2; i++) {
+                if (heaters[i].state == THERMAL_STATE_PID_RUNNING ||
+                    heaters[i].state == THERMAL_STATE_AUTOTUNE_RUNNING) {
+                    ESP_LOGW(TAG_THERMAL, "[%s] Print not running - heater OFF", heaters[i].name);
+                    heaters[i].state = THERMAL_STATE_OFF;
+                    heaters[i].pid.setpoint = 0.0f;
+                    heaters[i].residency_sec = 0.0f;
+                }
+            }
+        }
 
         /* Step 3: Process control and safety loop for each channel independently */
         for (int i = 0; i < 2; i++) {
@@ -282,6 +404,24 @@ void thermal_task(void *pvParameters) {
 
             float smooth_mv = adc_filter_update(&h->filter, (float)raw_mv);
             h->current_temp = thermistor_mv_to_celsius(smooth_mv, &THERMISTOR_NTC3950_DEFAULT);
+
+            /* Absolute limits, checked in EVERY state (a failed-on MOSFET heats
+               even while the heater is OFF). Any violation latches a global fault. */
+            if (isnan(h->current_temp) || h->current_temp < THERMAL_MINTEMP) {
+                if (h->state != THERMAL_STATE_FAULT) {
+                    ESP_LOGE(TAG_THERMAL, "[%s] MINTEMP: reading %.1f C (sensor shorted/broken?)",
+                             h->name, h->current_temp);
+                }
+                h->state = THERMAL_STATE_FAULT;
+                thermal_set_fault();
+            } else if (h->current_temp > h->max_temp) {
+                if (h->state != THERMAL_STATE_FAULT) {
+                    ESP_LOGE(TAG_THERMAL, "[%s] MAXTEMP: %.1f C exceeds %.0f C limit!",
+                             h->name, h->current_temp, h->max_temp);
+                }
+                h->state = THERMAL_STATE_FAULT;
+                thermal_set_fault();
+            }
 
             float pwm_output = 0.0f;
 
@@ -344,12 +484,36 @@ void thermal_task(void *pvParameters) {
                 h->runaway_timer_sec = 0.0f;
             }
 
-            /* Drive Hardware PWM Output */
-            if (h->state == THERMAL_STATE_FAULT) {
-                mosfet_set_duty_raw(0.0f, h->pwm_chan);
+            /* "Target reached" timer for M109 / M190 */
+            if (h->state == THERMAL_STATE_PID_RUNNING &&
+                fabsf(h->current_temp - h->pid.setpoint) <= h->target_window) {
+                h->residency_sec += dt_seconds;
             } else {
-                mosfet_set_duty_raw(pwm_output, h->pwm_chan);
+                h->residency_sec = 0.0f;
             }
+
+            /* A fault on either heater stops both (latched until reboot). */
+            if (h->state == THERMAL_STATE_FAULT) {
+                thermal_set_fault();
+            }
+
+            /* Drive Hardware PWM Output (signature is: channel, duty) */
+            if (thermal_fault_active() || h->state == THERMAL_STATE_FAULT) {
+                mosfet_set_duty_raw(h->pwm_chan, 0);
+            } else {
+                mosfet_set_duty_raw(h->pwm_chan, (uint32_t)pwm_output);
+            }
+        }
+
+        thermal_publish_status(heaters);
+
+        /* Temperature report once per second */
+        if (++log_ticks >= 10) {
+            log_ticks = 0;
+            ESP_LOGI(TAG_THERMAL, "HOTEND %.1f/%.0f C | BED %.1f/%.0f C%s",
+                     heaters[HEATER_HOTEND].current_temp, heaters[HEATER_HOTEND].pid.setpoint,
+                     heaters[HEATER_BED].current_temp, heaters[HEATER_BED].pid.setpoint,
+                     thermal_fault_active() ? " | FAULT" : "");
         }
     }
 }
@@ -420,6 +584,9 @@ void step_generator_task(void *pvParameters) {
             ESP_LOGI(TAG_RMT, "Received motion block -> master_steps: %lu, dir_bits: 0x%02X", 
                      (unsigned long)motion.master_steps, motion.dir_bits);
 
+            g_homing_block = (motion.motion_mode == MOTION_MODE_HOMING);
+            g_block_executing = true;
+
             // set direction pins
             for (int i = 0; i < NUM_AXES; i++) {
                 gpio_set_level(dir_pins[i], (motion.dir_bits >> i) & 0x01);
@@ -449,6 +616,8 @@ void step_generator_task(void *pvParameters) {
             if (homing_approach && endstop_is_pressed(approach_axis)) {
                 ESP_LOGW(TAG_RMT, "Axis %d already on its endstop, skipping approach", approach_axis);
                 endstop_set_armed(approach_axis, false);
+                g_pos_mm[approach_axis] = 0.0f;
+                g_block_executing = false;
                 continue;
             }
 
@@ -632,6 +801,18 @@ void step_generator_task(void *pvParameters) {
                 }
             }
 
+            // Publish position for the display. Homing blocks carry pre-home
+            // coordinates, and the planner calls the homed spot 0, so explicitly
+            // report the homed axis as 0 instead of the block's end_mm.
+            if (motion.motion_mode == MOTION_MODE_HOMING) {
+                if (motion.master_axis < 3) g_pos_mm[motion.master_axis] = 0.0f;
+            } else if (!abort_triggered) {
+                g_pos_mm[0] = motion.end_mm[0];
+                g_pos_mm[1] = motion.end_mm[1];
+                g_pos_mm[2] = motion.end_mm[2];
+            }
+            g_block_executing = false;
+
             ESP_LOGI(TAG_RMT, "Motion block execution finished (%u ping-pong refills)", (unsigned int)iterations);
         }
     }
@@ -704,36 +885,116 @@ void sys_state_machine_task(void *pvParameters) {
     }
 }
 
+// Work out what the printer is doing right now, for the status screen.
+static ui_print_state_t get_print_state(void) {
+    if (thermal_fault_active()) return UI_STATE_FAULT;
+
+    bool running = (xEventGroupGetBits(sys_event_group) & SYS_RUNNING_BIT) != 0;
+    if (!running) return UI_STATE_IDLE;
+
+    if (eTaskGetState(xStepGenTaskHandle) == eSuspended) return UI_STATE_PAUSED;
+    if (g_waiting_for_heat) return UI_STATE_HEATING;
+    if (g_block_executing && g_homing_block) return UI_STATE_HOMING;
+
+    // Done only when the file is fully read AND nothing is left anywhere in the pipeline.
+    if (g_file_done && !g_block_executing &&
+        uxQueueMessagesWaiting(gcode_line_queue) == 0 &&
+        uxQueueMessagesWaiting(gcode_cmds_queue) == 0 &&
+        uxQueueMessagesWaiting(motion_queue) == 0) {
+        return UI_STATE_DONE;
+    }
+    return UI_STATE_PRINTING;
+}
+
+static void fill_live_status(ui_live_t *live, ui_print_state_t state, uint32_t elapsed_sec) {
+    live->state         = state;
+    live->nozzle_temp   = thermal_get_temp(HEATER_HOTEND);
+    live->nozzle_target = thermal_get_target(HEATER_HOTEND);
+    live->bed_temp      = thermal_get_temp(HEATER_BED);
+    live->bed_target    = thermal_get_target(HEATER_BED);
+    live->x             = g_pos_mm[0];
+    live->y             = g_pos_mm[1];
+    live->z             = g_pos_mm[2];
+    live->elapsed_sec   = elapsed_sec;
+
+    long size = g_file_size;
+    if (size > 0) {
+        long pct = (long)(((int64_t)g_file_bytes_read * 100) / size);   // 64-bit: no overflow on big files
+        if (state == UI_STATE_DONE) pct = 100;
+        live->progress = (int)(pct > 100 ? 100 : pct);
+    } else {
+        live->progress = -1;
+    }
+}
+
 void ui_task(void *pvParameters) {
     ESP_LOGI(TAG_UI, "Task started successfully on core %d", xPortGetCoreID());
-    
+
     oled_init();
 
-    ui_data_t ui_data;
-    while(1) {
-        if (xQueueReceive(ui_queue, &ui_data, portMAX_DELAY) == pdTRUE) {
-            ESP_LOGI(TAG_UI, "Received UI data!");
-            
-            switch (ui_data.screen) {
-                case MAIN_SCREEN:
-                    ui_draw_main_screen();
-                    oled_highlight_line(2 + ui_data.selection); // the +2 offset starts highlighting the third row
-                    break;
-                case MENU_SCREEN:
-                    ui_draw_menu_screen();
-                    oled_highlight_line(2 + ui_data.selection);
-                    break;
-                default:
-                    break;
-            }
+    const TickType_t refresh_period = pdMS_TO_TICKS(500);   // status screen refresh: 2 Hz
 
-            // Only flush OLED when content changes
-            oled_flush();
+    ui_data_t ui_data = {0};
+    ui_data.screen = MAIN_SCREEN;
+    bool have_ui_data = false;
+
+    // print timer: starts when a print starts, freezes when it ends
+    bool       timer_running = false;
+    TickType_t print_start   = 0;
+    uint32_t   elapsed_sec   = 0;
+
+    while(1) {
+        bool got_event = (xQueueReceive(ui_queue, &ui_data, refresh_period) == pdTRUE);
+        if (got_event) {
+            ESP_LOGI(TAG_UI, "Received UI data!");
+            have_ui_data = true;
         }
+
+        ui_print_state_t state = get_print_state();
+        bool active = (state != UI_STATE_IDLE && state != UI_STATE_DONE && state != UI_STATE_FAULT);
+        if (active && !timer_running) {
+            timer_running = true;
+            print_start = xTaskGetTickCount();
+        } else if (!active && timer_running) {
+            timer_running = false;   // freeze the last value on screen
+        }
+        if (timer_running) {
+            elapsed_sec = (xTaskGetTickCount() - print_start) / configTICK_RATE_HZ;
+        }
+
+        if (!have_ui_data) continue;
+
+        // Menus only change on a button event; the status screen redraws every period.
+        if (!got_event && ui_data.screen != STATUS_SCREEN) continue;
+
+        switch (ui_data.screen) {
+            case MAIN_SCREEN:
+                ui_draw_main_screen();
+                oled_highlight_line(2 + ui_data.selection); // the +2 offset starts highlighting the third row
+                break;
+            case MENU_SCREEN:
+                ui_draw_menu_screen();
+                oled_highlight_line(2 + ui_data.selection);
+                break;
+            case STATUS_SCREEN: {
+                ui_live_t live;
+                fill_live_status(&live, state, elapsed_sec);
+                ui_draw_status_screen(&live);
+                break;
+            }
+            default:
+                break;
+        }
+
+        oled_flush();
     }
 }
 
 void app_main(void) {
+    // FIRST: drive heater/fan MOSFET gates to a defined 0% duty. Until this runs
+    // the pins float, and a floating gate can partly switch a heater on.
+    mosfet_driver_init();
+
     ESP_LOGI(TAG_MAIN, "Initializing IPC queues...");
 
     sys_event_group = xEventGroupCreate();
@@ -741,11 +1002,11 @@ void app_main(void) {
     motion_queue     = xQueueCreate(16, sizeof(PlannedMotion));
     gcode_cmds_queue = xQueueCreate(2, sizeof(GCodeCommand));
     gcode_line_queue = xQueueCreate(2, GCODE_LINE_MAX_LEN);
-    thermal_cmds_queue = xQueueCreate(2, sizeof(thermal_cmd_t));
+    thermal_cmds_queue = xQueueCreate(THERMAL_CMD_QUEUE_LEN, sizeof(thermal_cmd_t));
     ui_queue = xQueueCreate(5, sizeof(ui_data_t));
     gpio_evt_queue = xQueueCreate(10, sizeof(ButtonEdge_t));
     
-    if (!motion_queue || !gcode_cmds_queue || !gcode_line_queue) {
+    if (!motion_queue || !gcode_cmds_queue || !gcode_line_queue || !thermal_cmds_queue) {
         ESP_LOGE(TAG_MAIN, "Failed to allocate FreeRTOS Queues!");
         return;
     }
@@ -757,7 +1018,7 @@ void app_main(void) {
     xTaskCreatePinnedToCore(step_generator_task, "Step_Generator_Task", 4096, NULL, 2, &xStepGenTaskHandle, 1);
     xTaskCreatePinnedToCore(sd_streamer_task, "SD_Streamer_Task", 4096, NULL, 2, &xSDTaskHandle, 0);
     xTaskCreatePinnedToCore(sys_state_machine_task, "Sys_State_Machine_Task", 4096, NULL, 2, &xSysStateTaskHandle, 0);
-    //xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
+    xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
     xTaskCreatePinnedToCore(ui_task, "UI_Task", 4096, NULL, 2, &xUITaskHandle, 0);
 
     ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");
