@@ -10,3 +10,7 @@ tests/build/
 *.exe
 *.o
 *.log
+
+
+# PCB Files
+pcb/PCB_Project/History
