@@ -10,13 +10,14 @@ typedef struct {
     gpio_num_t gpio_num;
     ledc_channel_t channel;
     ledc_timer_t timer;
+    bool invert; // true when the MOSFET is driven through an inverting stage (e.g. NPN pulling the gate low)
     const char *name;
 } mosfet_config_t;
 
 static const mosfet_config_t g_mosfet_map[PWM_CH_NUM] = {
-    [PWM_CHANNEL_HOTEND] = { .gpio_num = HOTEND_GPIO,  .channel = LEDC_CHANNEL_0, .timer = LEDC_TIMER_0, .name = "Hotend"  },
-    [PWM_CHANNEL_HEATBED] = { .gpio_num = HEATBED_GPIO, .channel = LEDC_CHANNEL_1, .timer = LEDC_TIMER_0, .name = "Heatbed" },
-    [PWM_CHANNEL_PART_FAN] = { .gpio_num = PART_FAN_GPIO, .channel = LEDC_CHANNEL_2, .timer = LEDC_TIMER_1, .name = "PartFan"     }
+    [PWM_CHANNEL_HOTEND] = { .gpio_num = HOTEND_GPIO,  .channel = LEDC_CHANNEL_0, .timer = LEDC_TIMER_0, .invert = false, .name = "Hotend"  },
+    [PWM_CHANNEL_HEATBED] = { .gpio_num = HEATBED_GPIO, .channel = LEDC_CHANNEL_1, .timer = LEDC_TIMER_0, .invert = HEATBED_INVERTED, .name = "Heatbed" },
+    [PWM_CHANNEL_PART_FAN] = { .gpio_num = PART_FAN_GPIO, .channel = LEDC_CHANNEL_2, .timer = LEDC_TIMER_1, .invert = false, .name = "PartFan"     }
 };
 
 void mosfet_driver_init(void) {
@@ -57,7 +58,8 @@ void mosfet_driver_init(void) {
             .intr_type      = LEDC_INTR_DISABLE,
             .gpio_num       = g_mosfet_map[i].gpio_num,
             .duty           = 0, // Ensure output starts OFF
-            .hpoint         = 0
+            .hpoint         = 0,
+            .flags.output_invert = g_mosfet_map[i].invert // hardware inversion: duty 0 still means OFF
         };
         
         if (ledc_channel_config(&ledc_channel) != ESP_OK) {

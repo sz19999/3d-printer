@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "driver/gpio.h"
+#include "nvs_flash.h"
 
 #include "gcode_parser.h"
 #include "motion_planner.h"
@@ -219,6 +220,39 @@ static void planner_wait_for_temperature(heater_source_t heater, uint32_t seq) {
     g_waiting_for_heat = false;
 }
 
+// Block until the M303 stamped `seq` has finished (complete, failed or faulted).
+// Without this the G-code file would end and clearing the running bit would cancel the tune.
+static void planner_wait_for_autotune(heater_source_t heater, uint32_t seq) {
+    const char *name = (heater == HEATER_BED) ? "BED" : "HOTEND";
+    ESP_LOGI(TAG_PLANNER, "Waiting for %s autotune to finish...", name);
+
+    g_waiting_for_heat = true;   // shown as HEATING on the display
+
+    TickType_t last_log = xTaskGetTickCount();
+    while (1) {
+        if (thermal_fault_active()) {
+            ESP_LOGE(TAG_PLANNER, "Stopped waiting for %s autotune: thermal fault.", name);
+            break;
+        }
+        if ((xEventGroupGetBits(sys_event_group) & SYS_RUNNING_BIT) == 0) {
+            ESP_LOGW(TAG_PLANNER, "Stopped waiting for %s autotune: print aborted.", name);
+            break;
+        }
+        // Only trust "not tuning" once the thermal task has applied THIS command.
+        if ((int32_t)(thermal_last_applied_seq() - seq) >= 0 && !thermal_autotune_active(heater)) {
+            ESP_LOGI(TAG_PLANNER, "%s autotune finished. Resuming.", name);
+            break;
+        }
+        if (xTaskGetTickCount() - last_log >= pdMS_TO_TICKS(5000)) {
+            last_log = xTaskGetTickCount();
+            ESP_LOGI(TAG_PLANNER, "...%s autotune running, %.1f C", name, thermal_get_temp(heater));
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+
+    g_waiting_for_heat = false;
+}
+
 // Same effect as the UI's Abort, triggered by a latched thermal fault.
 static void abort_print_on_thermal_fault(RingBuffer *buffer) {
     ESP_LOGE(TAG_PLANNER, "THERMAL FAULT - aborting print.");
@@ -306,6 +340,15 @@ void motion_planner_task(void *pvParameters) {
                         heater_source_t heater = (metadata.cmd_num == 190) ? HEATER_BED : HEATER_HOTEND;
                         planner_wait_for_temperature(heater, metadata.seq);
                     }
+
+                    // M303: block the G-code stream until the autotune is done.
+                    if (metadata.cmd_num == 303) {
+                        flush_planner_buffer(&buffer);
+                        planner_state = PLANNER_STATE_BUFFERING;
+
+                        heater_source_t heater = metadata.autotune_bed ? HEATER_BED : HEATER_HOTEND;
+                        planner_wait_for_autotune(heater, metadata.seq);
+                    }
                 }
             }
         }
@@ -390,14 +433,17 @@ void thermal_task(void *pvParameters) {
             }
         }
 
-        /* Step 3: Process control and safety loop for each channel independently */
+        /* Step 3: Read both sensors once per cycle (oversampled over one heater PWM period) */
+        uint32_t sensor_mv[2] = {0, 0};
+        esp_err_t adc_err = dual_adc_read_both_mv(&sensors_adc, &sensor_mv[HEATER_HOTEND], &sensor_mv[HEATER_BED]);
+
+        /* Step 4: Process control and safety loop for each channel independently */
         for (int i = 0; i < 2; i++) {
             heater_channel_t *h = &heaters[i];
 
-            /* Read Sensor Signal */
-            uint32_t raw_mv = 0;
-            esp_err_t err = dual_adc_read_channel_mv(&sensors_adc, h->adc_chan, &raw_mv);
-            if (err != ESP_OK) {
+            /* Sensor Signal */
+            uint32_t raw_mv = sensor_mv[i];
+            if (adc_err != ESP_OK) {
                 ESP_LOGE(TAG_THERMAL, "[%s] ADC Read Failure! Triggering FAULT.", h->name);
                 h->state = THERMAL_STATE_FAULT;
             }
@@ -445,9 +491,16 @@ void thermal_task(void *pvParameters) {
                                  h->autotune.calculated_gains.kp,
                                  h->autotune.calculated_gains.ki,
                                  h->autotune.calculated_gains.kd);
+                        if (thermal_save_gains((heater_source_t)i, &h->autotune.calculated_gains)) {
+                            ESP_LOGI(TAG_THERMAL, "[%s] Gains saved to flash - loaded automatically on every boot.",
+                                     h->name);
+                        } else {
+                            ESP_LOGE(TAG_THERMAL, "[%s] Gains NOT saved; they are lost on reboot.", h->name);
+                        }
 
+                        // New gains apply to the next M104/M140; the heater goes OFF (setpoint 0), like Marlin.
                         pid_init(&h->pid, &h->autotune.calculated_gains, &h->pid.limits);
-                        h->state = THERMAL_STATE_PID_RUNNING;
+                        h->state = THERMAL_STATE_OFF;
 
                     } else if (h->autotune.state == AUTOTUNE_STATE_FAILED) {
                         ESP_LOGE(TAG_THERMAL, "[%s] Autotune failed or timed out!", h->name);
@@ -462,26 +515,58 @@ void thermal_task(void *pvParameters) {
                     break;
             }
 
-            /* Thermal Runaway Protection Logic */
-            if (pwm_output > 818.0f && h->state != THERMAL_STATE_FAULT) {
-                if (h->runaway_timer_sec == 0.0f) {
-                    h->runaway_start_temp = h->current_temp;
-                }
-                
-                h->runaway_timer_sec += dt_seconds;
-                
-                if (h->runaway_timer_sec >= RUNAWAY_TIME_LIMIT_SEC) {
-                    if ((h->current_temp - h->runaway_start_temp) < RUNAWAY_TEMP_THRESHOLD) {
-                        ESP_LOGE(TAG_THERMAL, "[%s] THERMAL RUNAWAY: Power applied but temp not rising!", h->name);
-                        h->state = THERMAL_STATE_FAULT;
-                    } else {
-                        h->runaway_start_temp = h->current_temp;
-                        h->runaway_timer_sec = 0.0f;
-                    }
-                }
-            } else {
+            /* Thermal Runaway Protection Logic - two explicit phases, see thermal_task.h */
+            float active_target = thermal_active_target(h);
+
+            if (h->state == THERMAL_STATE_FAULT || active_target <= 0.0f) {
+                /* Heater off: nothing to watch. The next target starts in the heating-up phase. */
+                h->reached_target = false;
+                h->below_band_sec = 0.0f;
                 h->runaway_start_temp = h->current_temp;
                 h->runaway_timer_sec = 0.0f;
+
+            } else if (!h->reached_target) {
+                /* Phase 1 - heating up: at >80% power the temperature must keep rising. */
+                if (pwm_output > 818.0f) {
+                    if (h->runaway_timer_sec == 0.0f) {
+                        h->runaway_start_temp = h->current_temp;
+                    }
+
+                    h->runaway_timer_sec += dt_seconds;
+
+                    if (h->runaway_timer_sec >= h->runaway_period_sec) {
+                        if ((h->current_temp - h->runaway_start_temp) < RUNAWAY_TEMP_THRESHOLD) {
+                            ESP_LOGE(TAG_THERMAL, "[%s] THERMAL RUNAWAY: Power applied but temp not rising!", h->name);
+                            h->state = THERMAL_STATE_FAULT;
+                        } else {
+                            h->runaway_start_temp = h->current_temp;
+                            h->runaway_timer_sec = 0.0f;
+                        }
+                    }
+                } else {
+                    h->runaway_start_temp = h->current_temp;
+                    h->runaway_timer_sec = 0.0f;
+                }
+
+                if (h->current_temp >= active_target - h->target_window) {
+                    h->reached_target = true;
+                    h->runaway_timer_sec = 0.0f;
+                    ESP_LOGI(TAG_THERMAL, "[%s] Reached %.0f C - runaway check now in holding mode", h->name, active_target);
+                }
+
+            } else {
+                /* Phase 2 - holding: fault only on a sustained drop far below target
+                   (heater or thermistor lost), regardless of the momentary PWM. */
+                if (h->current_temp < active_target - h->hold_band) {
+                    h->below_band_sec += dt_seconds;
+                    if (h->below_band_sec >= h->hold_period_sec) {
+                        ESP_LOGE(TAG_THERMAL, "[%s] THERMAL RUNAWAY: %.1f C, more than %.0f C below target for %.0f s!",
+                                 h->name, h->current_temp, h->hold_band, h->hold_period_sec);
+                        h->state = THERMAL_STATE_FAULT;
+                    }
+                } else {
+                    h->below_band_sec = 0.0f;
+                }
             }
 
             /* "Target reached" timer for M109 / M190 */
@@ -995,6 +1080,19 @@ void app_main(void) {
     // the pins float, and a floating gate can partly switch a heater on.
     mosfet_driver_init();
 
+    // NVS holds the autotuned PID gains; the thermal task reads them at startup.
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // Partition is full or from an incompatible IDF version: wipe it (gains fall back to defaults).
+        ESP_LOGW(TAG_MAIN, "NVS partition unusable (%s), erasing it.", esp_err_to_name(nvs_err));
+        nvs_flash_erase();
+        nvs_err = nvs_flash_init();
+    }
+    if (nvs_err != ESP_OK) {
+        ESP_LOGE(TAG_MAIN, "NVS init failed (%s): PID gains will use built-in defaults.",
+                 esp_err_to_name(nvs_err));
+    }
+
     ESP_LOGI(TAG_MAIN, "Initializing IPC queues...");
 
     sys_event_group = xEventGroupCreate();
@@ -1018,7 +1116,8 @@ void app_main(void) {
     xTaskCreatePinnedToCore(step_generator_task, "Step_Generator_Task", 4096, NULL, 2, &xStepGenTaskHandle, 1);
     xTaskCreatePinnedToCore(sd_streamer_task, "SD_Streamer_Task", 4096, NULL, 2, &xSDTaskHandle, 0);
     xTaskCreatePinnedToCore(sys_state_machine_task, "Sys_State_Machine_Task", 4096, NULL, 2, &xSysStateTaskHandle, 0);
-    xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 4096, NULL, 3, &xThermalTaskHandle, 0);
+    // Extra stack for the NVS flash calls (PID gains load at start, save after autotune).
+    xTaskCreatePinnedToCore(thermal_task, "Thermal_Task", 6144, NULL, 3, &xThermalTaskHandle, 0);
     xTaskCreatePinnedToCore(ui_task, "UI_Task", 4096, NULL, 2, &xUITaskHandle, 0);
 
     ESP_LOGI(TAG_MAIN, "Initialization complete. Scheduler running.");

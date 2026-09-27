@@ -10,5 +10,5 @@ idf_component_register(
     INCLUDE_DIRS 
         "inc"
         "../../../core/inc"
-    REQUIRES esp_driver_gpio log esp_adc driver esp_driver_ledc
+    REQUIRES esp_driver_gpio log esp_adc driver esp_driver_ledc nvs_flash esp_timer
 )

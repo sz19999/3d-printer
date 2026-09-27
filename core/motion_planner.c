@@ -213,6 +213,8 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     M104 S210 = set hotend temperature
     M140 S60  = set bed temperature
     M106 S200 = set fan speed (0-255)
+    M303 E0 S200  = PID autotune hotend at 200 C
+    M303 E-1 S60  = PID autotune bed at 60 C
 */
 void handle_metadata_command(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata) {
     if (gcode_cmd->command_letter == 'M') {
@@ -226,6 +228,9 @@ void handle_metadata_command(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata) {
             case 106:  // Set fan speed
             case 107:  // turn off fan
                 set_fan_speed(gcode_cmd, metadata);
+                break;
+            case 303:  // PID autotune
+                set_autotune(gcode_cmd, metadata);
                 break;
             default:
                 break;
@@ -251,6 +256,15 @@ void set_fan_speed(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata) {
     if (gcode_cmd->has_S) {
         metadata->fan_speed = gcode_cmd->S;
         metadata->cmd_num = gcode_cmd->command_number;
+    }
+}
+
+void set_autotune(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata) {
+    if (gcode_cmd->has_S && gcode_cmd->S > 0) {
+        metadata->temp_target = gcode_cmd->S;
+        metadata->cmd_num = gcode_cmd->command_number;
+        // Marlin convention: E-1 = bed, E0 (or no E) = hotend
+        metadata->autotune_bed = gcode_cmd->has_E && gcode_cmd->E < 0.0f;
     }
 }
 

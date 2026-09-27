@@ -11,6 +11,10 @@
 #define HOTEND_ADC_CHANNEL  ADC_CHANNEL_3  /* GPIO 4 */
 #define BED_ADC_CHANNEL     ADC_CHANNEL_4  /* GPIO 5 */
 
+/* Samples per channel per reading, spread evenly over one heater PWM period.
+   Averaging N samples cuts the ADC's random noise by sqrt(N) (32 -> ~5.7x). */
+#define ADC_OVERSAMPLE_ROUNDS  32
+
 typedef struct {
     adc_oneshot_unit_handle_t unit_handle;
     
@@ -25,5 +29,11 @@ typedef struct {
 
 esp_err_t dual_adc_init(dual_adc_t *handle);
 esp_err_t dual_adc_read_channel_mv(dual_adc_t *handle, adc_channel_t channel, uint32_t *out_mv);
+
+/* Oversampled read of both thermistors: ADC_OVERSAMPLE_ROUNDS interleaved samples per
+   channel, evenly spaced over exactly one heater PWM period, averaged, then calibrated.
+   Covering the whole period turns heater-PWM ripple into a steady offset instead of noise.
+   Busy-waits for one PWM period (10 ms at 100 Hz). */
+esp_err_t dual_adc_read_both_mv(dual_adc_t *handle, uint32_t *hotend_mv, uint32_t *bed_mv);
 
 #endif /* ADC_H */

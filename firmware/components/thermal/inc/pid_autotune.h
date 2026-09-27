@@ -5,8 +5,8 @@
 #include "pid_controller.h"
 
 typedef enum {
-    TUNING_METHOD_TYREUS_LUYBEN, // Recommended for Hotends (Zero Overshoot)
-    TUNING_METHOD_ZIEGLER_NICHOLS // Recommended for Heated Beds (Fast Heat-Up)
+    TUNING_METHOD_TYREUS_LUYBEN, // Used for the bed: large thermal mass, low overshoot
+    TUNING_METHOD_ZIEGLER_NICHOLS // Used for the hotend: fast response to fan/flow changes
 } tuning_method_t;
 
 typedef enum {
@@ -39,6 +39,7 @@ typedef struct {
     // Timing & Math Accumulators
     float elapsed_time;
     float cycle_start_time;
+    float last_switch_time; // for the minimum dwell between relay switches
     float period_sum;
     float amplitude_sum;
     int measurement_count;

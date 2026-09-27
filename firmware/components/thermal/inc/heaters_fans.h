@@ -9,6 +9,8 @@
 #define HEATBED_GPIO        GPIO_NUM_6
 #define PART_FAN_GPIO       GPIO_NUM_15
 
+#define HEATBED_INVERTED    false               // NPN driver stage is non-inverting on this board: GPIO high = bed ON
+
 #define HEATER_PWM_FREQ_HZ  100                 // Low frequency for thermal stability & low EMI
 #define FAN_PWM_FREQ_HZ     25000               // High frequency (25 kHz) to avoid audible motor hum
 #define PWM_RESOLUTION      LEDC_TIMER_10_BIT   // 0 to 1023 range

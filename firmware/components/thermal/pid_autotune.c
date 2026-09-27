@@ -4,6 +4,11 @@
 #define PI 3.14159f
 #endif
 
+/* Minimum time between relay switches (as in Marlin). Sensor noise near the setpoint
+   is larger than the hysteresis band and would otherwise flip the relay back within
+   a sample or two, counting fake short cycles and corrupting the gains. */
+#define AUTOTUNE_MIN_SWITCH_SEC 5.0f
+
 void autotune_init(autotune_t *tuner, const autotune_config_t *config) {
     if (!tuner || !config) return;
 
@@ -15,6 +20,7 @@ void autotune_init(autotune_t *tuner, const autotune_config_t *config) {
     tuner->peak_low = config->target_temp;
     tuner->elapsed_time = 0.0f;
     tuner->cycle_start_time = 0.0f;
+    tuner->last_switch_time = 0.0f;
     tuner->period_sum = 0.0f;
     tuner->amplitude_sum = 0.0f;
     tuner->measurement_count = 0;
@@ -38,21 +44,28 @@ float autotune_step(autotune_t *tuner, float current_temp, float dt_seconds) {
         return 0.0f;
     }
 
-    /* 2. Track Crest (High) and Trough (Low) Peaks */
+    /* 2. Track Crest (High) and Trough (Low) Peaks.
+       Thermal lag puts the crest AFTER switch-off and the trough AFTER switch-on,
+       so peak_high is re-armed at switch-off and peak_low at switch-on. */
     if (current_temp > tuner->peak_high) tuner->peak_high = current_temp;
     if (current_temp < tuner->peak_low)  tuner->peak_low  = current_temp;
 
-    /* 3. Relay Switching Logic with Hysteresis Band */
-    if (tuner->heating && current_temp >= (tuner->config.target_temp + tuner->config.hysteresis)) {
+    /* 3. Relay Switching Logic with Hysteresis Band and a minimum dwell per state */
+    bool may_switch = (tuner->elapsed_time - tuner->last_switch_time) >= AUTOTUNE_MIN_SWITCH_SEC;
+
+    if (tuner->heating && may_switch &&
+        current_temp >= (tuner->config.target_temp + tuner->config.hysteresis)) {
         /* Temperature exceeded upper threshold: Switch Relay OFF */
         tuner->heating = false;
+        tuner->last_switch_time = tuner->elapsed_time;
         
         if (tuner->state == AUTOTUNE_STATE_HEATING) {
             /* Ramp-up complete, entering steady oscillation cycles */
             tuner->state = AUTOTUNE_STATE_CYCLING;
             tuner->cycle_start_time = tuner->elapsed_time;
         } else {
-            /* Completed a full oscillation period */
+            /* Completed a full oscillation period: peak_high holds the crest since the
+               previous switch-off, peak_low the trough since the last switch-on. */
             float period = tuner->elapsed_time - tuner->cycle_start_time;
             float amplitude = tuner->peak_high - tuner->peak_low;
 
@@ -67,14 +80,16 @@ float autotune_step(autotune_t *tuner, float current_temp, float dt_seconds) {
             tuner->current_cycle++;
         }
 
-        /* Reset low peak tracker for upcoming trough */
-        tuner->peak_low = current_temp;
+        /* Re-arm high peak tracker for the crest that follows this switch-off */
+        tuner->peak_high = current_temp;
 
-    } else if (!tuner->heating && current_temp <= (tuner->config.target_temp - tuner->config.hysteresis)) {
+    } else if (!tuner->heating && may_switch &&
+               current_temp <= (tuner->config.target_temp - tuner->config.hysteresis)) {
         /* Temperature dropped below lower threshold: Switch Relay ON */
         tuner->heating = true;
-        /* Reset high peak tracker for upcoming crest */
-        tuner->peak_high = current_temp;
+        tuner->last_switch_time = tuner->elapsed_time;
+        /* Re-arm low peak tracker for the trough that follows this switch-on */
+        tuner->peak_low = current_temp;
     }
 
     /* 4. Calculate Final Gains on Completion */
@@ -83,16 +98,17 @@ float autotune_step(autotune_t *tuner, float current_temp, float dt_seconds) {
         float avg_amplitude = tuner->amplitude_sum / (float)tuner->measurement_count;
 
         if (avg_amplitude > 0.001f && avg_period > 0.001f) {
-            /* Calculate Ultimate Gain (Ku) */
-            float ku = (8.0f * tuner->config.output_power) / (PI * avg_amplitude);
+            /* Ultimate Gain: Ku = 4d / (pi * a), with relay amplitude d = output_power / 2
+               (output swings 0..P) and oscillation amplitude a = peak-to-peak / 2. */
+            float ku = (4.0f * tuner->config.output_power) / (PI * avg_amplitude);
 
             if (tuner->config.method == TUNING_METHOD_TYREUS_LUYBEN) {
-                /* Tyreus-Luyben Formula (Hotend Focus: Zero Overshoot) */
+                /* Tyreus-Luyben Formula (Bed Focus: Low Overshoot) */
                 tuner->calculated_gains.kp = 0.45f * ku;
                 tuner->calculated_gains.ki = tuner->calculated_gains.kp / (2.2f * avg_period);
                 tuner->calculated_gains.kd = (tuner->calculated_gains.kp * avg_period) / 6.3f;
             } else {
-                /* Ziegler-Nichols Formula (Bed Focus: Fast Heat-Up) */
+                /* Ziegler-Nichols Formula (Hotend Focus: Fast Response) */
                 tuner->calculated_gains.kp = 0.60f * ku;
                 tuner->calculated_gains.ki = (2.0f * tuner->calculated_gains.kp) / avg_period;
                 tuner->calculated_gains.kd = (tuner->calculated_gains.kp * avg_period) / 8.0f;

@@ -74,6 +74,7 @@ typedef struct {
     uint32_t cmd_num;
     uint16_t temp_target;    // in celsius
     uint16_t fan_speed;
+    bool     autotune_bed;   // M303 only: E-1 selects the bed, anything else the hotend
     uint32_t seq;            // stamped by the planner; the thermal task publishes the last applied seq
 } thermal_cmd_t;
 
@@ -98,6 +99,7 @@ void set_motion_type(GCodeCommand* gcode_cmd, RingBuffer* buffer);
 // handle_metadata_command() aux funcs
 void set_heater_temp(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata);
 void set_fan_speed(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata);
+void set_autotune(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata);
 
 // create_initial_profile() helper functions
 float limit_velocity(float v_target, float ux, float uy, float uz);

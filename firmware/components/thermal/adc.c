@@ -1,5 +1,7 @@
 #include "adc.h"
+#include "heaters_fans.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_adc/adc_cali_scheme.h"
 
 static const char *TAG = "DUAL_ADC";
@@ -102,5 +104,57 @@ esp_err_t dual_adc_read_channel_mv(dual_adc_t *handle, adc_channel_t channel, ui
 
     /* Fallback estimation if eFuse curve fitting wasn't available */
     *out_mv = (uint32_t)((raw * 3300) / 4095);
+    return ESP_OK;
+}
+
+/* Convert an averaged raw reading to mV with the channel's calibration (or the linear fallback). */
+static uint32_t raw_to_mv(int raw, adc_cali_handle_t cali_handle, bool cali_enabled) {
+    if (cali_enabled) {
+        int voltage_mv = 0;
+        if (adc_cali_raw_to_voltage(cali_handle, raw, &voltage_mv) == ESP_OK) {
+            return (uint32_t)voltage_mv;
+        }
+    }
+    return (uint32_t)((raw * 3300) / 4095);
+}
+
+esp_err_t dual_adc_read_both_mv(dual_adc_t *handle, uint32_t *hotend_mv, uint32_t *bed_mv) {
+    if (!handle || !hotend_mv || !bed_mv) return ESP_ERR_INVALID_ARG;
+
+    const int64_t period_us  = 1000000 / HEATER_PWM_FREQ_HZ;
+    const int64_t spacing_us = period_us / ADC_OVERSAMPLE_ROUNDS;
+
+    uint32_t hotend_sum = 0;
+    uint32_t bed_sum = 0;
+    int64_t next_us = esp_timer_get_time();
+
+    for (int i = 0; i < ADC_OVERSAMPLE_ROUNDS; i++) {
+        // Hold each round to its slot so the samples cover the PWM period evenly,
+        // whatever the individual conversions take.
+        while (esp_timer_get_time() < next_us) { }
+        next_us += spacing_us;
+
+        int raw = 0;
+        esp_err_t err = adc_oneshot_read(handle->unit_handle, HOTEND_ADC_CHANNEL, &raw);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Raw read failed on Channel %d: %s", HOTEND_ADC_CHANNEL, esp_err_to_name(err));
+            return err;
+        }
+        hotend_sum += (uint32_t)raw;
+
+        err = adc_oneshot_read(handle->unit_handle, BED_ADC_CHANNEL, &raw);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Raw read failed on Channel %d: %s", BED_ADC_CHANNEL, esp_err_to_name(err));
+            return err;
+        }
+        bed_sum += (uint32_t)raw;
+    }
+
+    // Round to nearest when averaging
+    int hotend_raw = (int)((hotend_sum + ADC_OVERSAMPLE_ROUNDS / 2) / ADC_OVERSAMPLE_ROUNDS);
+    int bed_raw    = (int)((bed_sum    + ADC_OVERSAMPLE_ROUNDS / 2) / ADC_OVERSAMPLE_ROUNDS);
+
+    *hotend_mv = raw_to_mv(hotend_raw, handle->hotend_cali_handle, handle->hotend_cali_enabled);
+    *bed_mv    = raw_to_mv(bed_raw,    handle->bed_cali_handle,    handle->bed_cali_enabled);
     return ESP_OK;
 }
