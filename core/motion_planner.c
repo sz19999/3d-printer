@@ -184,7 +184,7 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
 
     // move Z away a few mm from the endstop
     memset(&gcode_cmd, 0, sizeof(GCodeCommand));
-    parse_command("G0 Z3 F600", &gcode_cmd);
+    parse_command("G0 Z0.5 F600", &gcode_cmd);
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", move_cmd);
 

@@ -1112,7 +1112,9 @@ void app_main(void) {
     ESP_LOGI(TAG_MAIN, "Spawning FreeRTOS tasks...");
 
     xTaskCreatePinnedToCore(parser_task, "Parser_Task", 4096, NULL, 2, &xParserTaskHandle, 0);
-    xTaskCreatePinnedToCore(motion_planner_task, "Planner_Task", 4096, NULL, 2, &xPlannerTaskHandle, 0);
+    // 8 KB: the 16-block lookahead RingBuffer lives on this stack (~1.8 KB), and homing
+    // plus print_motion_block() format floats with sprintf/ESP_LOG. 4 KB overflowed on G28.
+    xTaskCreatePinnedToCore(motion_planner_task, "Planner_Task", 8192, NULL, 2, &xPlannerTaskHandle, 0);
     xTaskCreatePinnedToCore(step_generator_task, "Step_Generator_Task", 4096, NULL, 2, &xStepGenTaskHandle, 1);
     xTaskCreatePinnedToCore(sd_streamer_task, "SD_Streamer_Task", 4096, NULL, 2, &xSDTaskHandle, 0);
     xTaskCreatePinnedToCore(sys_state_machine_task, "Sys_State_Machine_Task", 4096, NULL, 2, &xSysStateTaskHandle, 0);
