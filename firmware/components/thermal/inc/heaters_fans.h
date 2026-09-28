@@ -10,9 +10,11 @@
 #define PART_FAN_GPIO       GPIO_NUM_15
 
 #define HEATBED_INVERTED    false               // NPN driver stage is non-inverting on this board: GPIO high = bed ON
+#define PART_FAN_INVERTED   false               // single NPN low-side switch (fan - on collector): GPIO high = fan ON
 
 #define HEATER_PWM_FREQ_HZ  100                 // Low frequency for thermal stability & low EMI
-#define FAN_PWM_FREQ_HZ     25000               // High frequency (25 kHz) to avoid audible motor hum
+#define FAN_PWM_FREQ_HZ     100                 // Low frequency: a 2-wire fan switched on its power line needs ms-long
+                                                // off-times; at 25 kHz its own input capacitor bridged them (always full speed)
 #define PWM_RESOLUTION      LEDC_TIMER_10_BIT   // 0 to 1023 range
 #define PWM_RES_BITS        10
 #define PWM_CH_NUM          3

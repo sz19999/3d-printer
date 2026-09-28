@@ -17,7 +17,7 @@ typedef struct {
 static const mosfet_config_t g_mosfet_map[PWM_CH_NUM] = {
     [PWM_CHANNEL_HOTEND] = { .gpio_num = HOTEND_GPIO,  .channel = LEDC_CHANNEL_0, .timer = LEDC_TIMER_0, .invert = false, .name = "Hotend"  },
     [PWM_CHANNEL_HEATBED] = { .gpio_num = HEATBED_GPIO, .channel = LEDC_CHANNEL_1, .timer = LEDC_TIMER_0, .invert = HEATBED_INVERTED, .name = "Heatbed" },
-    [PWM_CHANNEL_PART_FAN] = { .gpio_num = PART_FAN_GPIO, .channel = LEDC_CHANNEL_2, .timer = LEDC_TIMER_1, .invert = false, .name = "PartFan"     }
+    [PWM_CHANNEL_PART_FAN] = { .gpio_num = PART_FAN_GPIO, .channel = LEDC_CHANNEL_2, .timer = LEDC_TIMER_1, .invert = PART_FAN_INVERTED, .name = "PartFan"     }
 };
 
 void mosfet_driver_init(void) {
@@ -36,7 +36,7 @@ void mosfet_driver_init(void) {
         return;
     }
 
-    // 2. Configure Timer 1 (Fan: 25 kHz)
+    // 2. Configure Timer 1 (Fan: FAN_PWM_FREQ_HZ)
     ledc_timer_config_t fan_timer = {
         .speed_mode       = LEDC_LOW_SPEED_MODE,
         .timer_num        = LEDC_TIMER_1,
