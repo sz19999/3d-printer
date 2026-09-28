@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 #include "gcode_lexer.h"
 #include "gcode_parser.h"
 
@@ -10,6 +11,11 @@ bool parse_command(const char* gcode_line, GCodeCommand* cmd) {
     
     const char* cursor = gcode_line;
     GCodeToken current_token;
+
+    // Every line starts from an empty command, so no value (X, E, S...) carries over from
+    // the previous line. A line with no command letter (blank or comment-only) stays
+    // command_letter == '\0' for the caller to skip.
+    memset(cmd, 0, sizeof(*cmd));
 
   do {
     cursor = lexer_get_next_token(cursor , &current_token);                  // 1. extract a token
@@ -30,9 +36,16 @@ static bool apply_token_to_command(const GCodeToken* tok, GCodeCommand* cmd) {
     switch (tok->letter) {
         case 'G':
         case 'M':
-        case 'T':
             cmd->command_letter = tok->letter;
             cmd->command_number = (int)tok->value;
+            break;
+        case 'T':
+            // "T0" alone is a tool-change command; a T after G/M (e.g. "M104 S210 T0")
+            // is a tool-index parameter. Single extruder: ignore it, keep the command.
+            if (cmd->command_letter == '\0') {
+                cmd->command_letter = tok->letter;
+                cmd->command_number = (int)tok->value;
+            }
             break;
         case 'X':
             cmd->has_X = true;

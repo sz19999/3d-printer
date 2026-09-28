@@ -8,11 +8,11 @@
 #include "gcode_lexer.h"
 
 const char* lexer_get_next_token(const char* cursor, GCodeToken* token) {  // pointer to a constant character
-    // skip spaces
+    // skip spaces (all of them, so every call returns a real token)
     while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
-        return ++cursor;
+        cursor++;
     }
-    
+
     // check if we hit the end of the line or a comment
     if (*cursor == '\0' || *cursor == '\n' || *cursor == '\r' || *cursor == ';') {
         token->type = TOKEN_EOF;
@@ -26,10 +26,10 @@ const char* lexer_get_next_token(const char* cursor, GCodeToken* token) {  // po
         token->type = TOKEN_VALID;
     }
     else {
+        token->letter = *cursor;
         token->type = TOKEN_ERROR;
     }
 
-    token->letter = *cursor;
     cursor++;
 
     // extract value

@@ -18,6 +18,11 @@
 static bool s_homing_active = false;
 static bool s_in_home_axes  = false;
 
+// s_e_relative: extruder distance mode, separate from X/Y/Z (Marlin semantics):
+// G90 -> E absolute, G91 -> E relative, M82 -> E absolute, M83 -> E relative.
+// PrusaSlicer sends "G90" then "M83"; Cura sends "M82".
+static bool s_e_relative = false;
+
 
 /* 
     checks if a G-code command is a motion command (G0, G1, G2, G3)
@@ -65,12 +70,14 @@ void handle_motion_command(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM*
                 s_homing_active = false;
                 break;
             case 90:
-                // absolute mode
+                // absolute mode (also resets E to absolute, like Marlin)
                 *absolute_mode = true;
+                s_e_relative = false;
                 break;
             case 91:
-                // relative move
+                // relative move (also makes E relative, like Marlin)
                 *absolute_mode = false;
+                s_e_relative = true;
                 break;
             default:
                 break;
@@ -127,13 +134,16 @@ void plan_motion_segment(GCodeCommand* gcode_cmd, RingBuffer* buffer, PointMM* c
 }
 
 void set_axes_pos(GCodeCommand* gcode_cmd, PointMM* current_mm, PointSteps* current_steps, bool absolute_mode) {
-    //update_target_coordinate(gcode_cmd, current_mm, absolute_mode);
-    //convert_from_mm_to_steps(current_steps, current_mm);
+    (void)absolute_mode;   // G92 values are always absolute, even in G91
 
     if (gcode_cmd->has_X) current_mm->x = gcode_cmd->X;
     if (gcode_cmd->has_Y) current_mm->y = gcode_cmd->Y;
     if (gcode_cmd->has_Z) current_mm->z = gcode_cmd->Z;
     if (gcode_cmd->has_E) current_mm->e = gcode_cmd->E;
+
+    // Keep the step counters in the same coordinates. Otherwise the next move is computed
+    // from the old step count: after "G92 E0" it would retract everything extruded so far.
+    convert_from_mm_to_steps(current_steps, current_mm);
 }
 
 void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_steps, bool absolute_mode) {
@@ -142,7 +152,11 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     char* relative_cmd = "G91";
     char* absolute_cmd = "G90";
     char move_cmd[128];
-    
+
+    // The internal G91/G90 below also switch the E mode; G28 must not change it
+    // (PrusaSlicer sends M83 before G28).
+    const bool saved_e_relative = s_e_relative;
+
     // change to relative mode
     memset(&gcode_cmd, 0, sizeof(GCodeCommand));
     parse_command(relative_cmd, &gcode_cmd);
@@ -194,6 +208,8 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     handle_motion_command(&gcode_cmd, buffer, current_mm, current_steps, &absolute_mode);
     ESP_LOGI("Home Axes", "G-Code command: \"%s\".", absolute_cmd);
 
+    s_e_relative = saved_e_relative;
+
     current_mm->x = 0.0f;
     current_mm->y = 0.0f;
     current_mm->z = 0.0f;
@@ -212,13 +228,21 @@ void home_axes(RingBuffer* buffer, PointMM* current_mm, PointSteps* current_step
     extracts thermal and auxiliary metadata from a G-code command and updates state
     M104 S210 = set hotend temperature
     M140 S60  = set bed temperature
-    M106 S200 = set fan speed (0-255)
+    M106 S200 = set fan speed (0-255), M106 alone = full speed
+    M107      = fan off
+    M82 / M83 = extruder absolute / relative (no thermal command is produced)
     M303 E0 S200  = PID autotune hotend at 200 C
     M303 E-1 S60  = PID autotune bed at 60 C
 */
 void handle_metadata_command(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata) {
     if (gcode_cmd->command_letter == 'M') {
         switch (gcode_cmd->command_number) {
+            case 82:   // Extruder absolute mode
+                s_e_relative = false;
+                break;
+            case 83:   // Extruder relative mode
+                s_e_relative = true;
+                break;
             case 104:  // Set hotend temperature
             case 109:  // Set hotend temperature and wait
             case 140:  // Set bed temperature
@@ -253,9 +277,16 @@ void set_heater_temp(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata) {
 }
 
 void set_fan_speed(GCodeCommand* gcode_cmd, thermal_cmd_t* metadata) {
-    if (gcode_cmd->has_S) {
+    metadata->cmd_num = gcode_cmd->command_number;
+
+    if (gcode_cmd->command_number == 107) {
+        metadata->fan_speed = 0;        // M107 takes no S: always off
+    } else if (!gcode_cmd->has_S) {
+        metadata->fan_speed = 255;      // Marlin: M106 without S = full speed
+    } else if (gcode_cmd->S < 0) {
+        metadata->fan_speed = 0;
+    } else {
         metadata->fan_speed = gcode_cmd->S;
-        metadata->cmd_num = gcode_cmd->command_number;
     }
 }
 
@@ -739,7 +770,8 @@ void update_target_coordinate(GCodeCommand* gcode_cmd, PointMM* target_mm, bool 
     if (gcode_cmd->has_X) target_mm->x = (absolute_mode) ? gcode_cmd->X : target_mm->x + gcode_cmd->X;
     if (gcode_cmd->has_Y) target_mm->y = (absolute_mode) ? gcode_cmd->Y : target_mm->y + gcode_cmd->Y;
     if (gcode_cmd->has_Z) target_mm->z = (absolute_mode) ? gcode_cmd->Z : target_mm->z + gcode_cmd->Z;
-    if (gcode_cmd->has_E) target_mm->e = (absolute_mode) ? gcode_cmd->E : target_mm->e + gcode_cmd->E;
+    // E follows its own mode (M82/M83), not the X/Y/Z mode
+    if (gcode_cmd->has_E) target_mm->e = (s_e_relative) ? target_mm->e + gcode_cmd->E : gcode_cmd->E;
 }
 
 /*

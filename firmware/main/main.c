@@ -123,7 +123,7 @@ void sd_streamer_task(void *pvParameters) {
 
             // dispatch gcode line
             if (xQueueSend(gcode_line_queue, gcode_line, portMAX_DELAY) == pdPASS) { // Wait indefinitely if queue is full
-                ESP_LOGI(TAG_SD, "Dispatched gcode line to gcode_line_queue.");
+                ESP_LOGD(TAG_SD, "Dispatched gcode line to gcode_line_queue.");
             }
             vTaskDelay(1); 
            // vTaskDelay(pdMS_TO_TICKS(1000)); // Brief delay for smooth serial observation
@@ -151,22 +151,23 @@ void parser_task(void *pvParameters) {
 
         // Wait indefinitely for raw gcode string lines
         if (xQueueReceive(gcode_line_queue, gcode_line, portMAX_DELAY) == pdTRUE) {
-            ESP_LOGI(TAG_PARSER, "Received raw line: \"%s\"", gcode_line);
+            ESP_LOGD(TAG_PARSER, "Received raw line: \"%s\"", gcode_line);
 
             // Parse raw gcode line text buffer
             if (!parse_command(gcode_line, &gcode_cmd)) {
-                ESP_LOGE(TAG_PARSER, "Failed to parse command: \"%s\"", gcode_line);
+                // Expected for slicer lines we don't support (e.g. "M73 P5 R10"): skip them.
+                ESP_LOGW(TAG_PARSER, "Skipped unsupported line: \"%s\"", gcode_line);
                 continue;   // dont dispatch invalid commands
             }
 
-            // dont dispatch pure comments
-            if (gcode_line[0] == ';') continue;
+            // dont dispatch lines without a command: comments and blank lines
+            if (gcode_cmd.command_letter == '\0') continue;
 
-            ESP_LOGI(TAG_PARSER, "Successfully parsed G-Code command: \"%s\".", gcode_line);
+            ESP_LOGD(TAG_PARSER, "Successfully parsed G-Code command: \"%s\".", gcode_line);
 
             // Dispatch into the parsed gcode queue
             if (xQueueSend(gcode_cmds_queue, &gcode_cmd, portMAX_DELAY) == pdPASS) {
-                ESP_LOGI(TAG_PARSER, "Dispatched GCodeCommand to gcode_cmds_queue.");
+                ESP_LOGD(TAG_PARSER, "Dispatched GCodeCommand to gcode_cmds_queue.");
             } else {
                 ESP_LOGE(TAG_PARSER, "gcode_cmds_queue full! Command dropped.");
             }
@@ -253,6 +254,27 @@ static void planner_wait_for_autotune(heater_source_t heater, uint32_t seq) {
     g_waiting_for_heat = false;
 }
 
+// M400: block the G-code stream until every queued move has finished executing.
+// Returns early on a thermal fault or when the print is aborted.
+static void planner_wait_for_moves(RingBuffer *buffer) {
+    flush_planner_buffer(buffer);
+
+    // "Idle" must be seen twice, 20 ms apart: right after the step generator takes the
+    // last block off the queue, the queue is empty but it has not yet set g_block_executing.
+    int idle_checks = 0;
+    while (idle_checks < 2) {
+        if (thermal_fault_active()) break;
+        if ((xEventGroupGetBits(sys_event_group) & SYS_RUNNING_BIT) == 0) break;
+
+        if (uxQueueMessagesWaiting(motion_queue) == 0 && !g_block_executing) {
+            idle_checks++;
+        } else {
+            idle_checks = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
 // Same effect as the UI's Abort, triggered by a latched thermal fault.
 static void abort_print_on_thermal_fault(RingBuffer *buffer) {
     ESP_LOGE(TAG_PLANNER, "THERMAL FAULT - aborting print.");
@@ -298,20 +320,24 @@ void motion_planner_task(void *pvParameters) {
         memset(&gcode_cmd, 0, sizeof(GCodeCommand)); // reset gcode cmd holder
 
         if (xQueueReceive(gcode_cmds_queue, &gcode_cmd, pdMS_TO_TICKS(10)) == pdTRUE) {
-            ESP_LOGI(TAG_PLANNER, "Received parsed command from queue.");
+            ESP_LOGD(TAG_PLANNER, "Received parsed command from queue.");
 
             if (is_motion_command(&gcode_cmd)) {
-                ESP_LOGI(TAG_PLANNER, "Command identified as MOTION. Planning velocity profile...");
+                ESP_LOGD(TAG_PLANNER, "Command identified as MOTION. Planning velocity profile...");
 
                 handle_motion_command(&gcode_cmd, &buffer, &current_mm, &current_steps, &absolute_mode);
 
                 if (buffer.count >= MIN_PLANNER_BLOCKS) {
                     planner_state = PLANNER_STATE_RUNNING;
                 } else {
-                    ESP_LOGW(TAG_PLANNER, "Buffer still buffering. Elements count: %d", buffer.count);
+                    ESP_LOGD(TAG_PLANNER, "Buffer still buffering. Elements count: %d", buffer.count);
                 }
+            } else if (gcode_cmd.command_letter == 'M' && gcode_cmd.command_number == 400) {
+                // M400: wait until every queued move has finished (e.g. before heaters off)
+                planner_wait_for_moves(&buffer);
+                planner_state = PLANNER_STATE_BUFFERING;
             } else {
-                ESP_LOGI(TAG_PLANNER, "Command identified as NON-MOTION (Heater/Fan/State). Processing metadata...");
+                ESP_LOGD(TAG_PLANNER, "Command identified as NON-MOTION (Heater/Fan/State). Processing metadata...");
                 thermal_cmd_t metadata;
                 memset(&metadata, 0, sizeof(thermal_cmd_t));
                 handle_metadata_command(&gcode_cmd, &metadata);
@@ -367,10 +393,10 @@ void motion_planner_task(void *pvParameters) {
             if (motion != NULL) {
                 
                 if (xQueueSend(motion_queue, motion, portMAX_DELAY) == pdPASS) {
-                    ESP_LOGI(TAG_PLANNER, "Buffer front returned a motion block.");
+                    ESP_LOGD(TAG_PLANNER, "Buffer front returned a motion block.");
                     print_motion_block(motion);
 
-                    ESP_LOGI(TAG_PLANNER, "Dispatched PlannedMotion block to motion_queue.");
+                    ESP_LOGD(TAG_PLANNER, "Dispatched PlannedMotion block to motion_queue.");
                     pop(&buffer);
                 } else {
                     ESP_LOGE(TAG_PLANNER, "motion_queue full! Could not send motion block.");
@@ -666,7 +692,7 @@ void step_generator_task(void *pvParameters) {
             bool abort_triggered = false;
             uint32_t notify_value = 0;
 
-            ESP_LOGI(TAG_RMT, "Received motion block -> master_steps: %lu, dir_bits: 0x%02X", 
+            ESP_LOGD(TAG_RMT, "Received motion block -> master_steps: %lu, dir_bits: 0x%02X",
                      (unsigned long)motion.master_steps, motion.dir_bits);
 
             g_homing_block = (motion.motion_mode == MOTION_MODE_HOMING);
@@ -718,7 +744,7 @@ void step_generator_task(void *pvParameters) {
             // prime bank 0 (bank A)
             size_t symbols_written_a = 0;
             generate_dda_rmt_buffers(&dda, ping_pong_buff[0], &symbols_written_a);
-            ESP_LOGI(TAG_RMT, "Primed Bank 0: %u symbols generated", (unsigned int)symbols_written_a);
+            ESP_LOGD(TAG_RMT, "Primed Bank 0: %u symbols generated", (unsigned int)symbols_written_a);
 
             if (symbols_written_a > 0) {
                 for (int axis = 0; axis < NUM_AXES; axis++) {
@@ -737,7 +763,7 @@ void step_generator_task(void *pvParameters) {
             size_t symbols_written_b = 0;
             if (dda.master_step_count < dda.block.master_steps) {
                 generate_dda_rmt_buffers(&dda, ping_pong_buff[1], &symbols_written_b);
-                ESP_LOGI(TAG_RMT, "Primed Bank 1: %u symbols generated", (unsigned int)symbols_written_b);
+                ESP_LOGD(TAG_RMT, "Primed Bank 1: %u symbols generated", (unsigned int)symbols_written_b);
 
                 if (symbols_written_b > 0) {
                     for (int axis = 0; axis < NUM_AXES; axis++) {
@@ -898,7 +924,7 @@ void step_generator_task(void *pvParameters) {
             }
             g_block_executing = false;
 
-            ESP_LOGI(TAG_RMT, "Motion block execution finished (%u ping-pong refills)", (unsigned int)iterations);
+            ESP_LOGD(TAG_RMT, "Motion block execution finished (%u ping-pong refills)", (unsigned int)iterations);
         }
     }
 }
@@ -1131,28 +1157,28 @@ void print_motion_block(const PlannedMotion* block) {
         return;
     }
 
-    ESP_LOGI(TAG_MOTION, "=== Planned Motion Block Details ===");
+    ESP_LOGD(TAG_MOTION, "=== Planned Motion Block Details ===");
 
     // Geometry & Distances
-    ESP_LOGI(TAG_MOTION, "Path Length: %.2f mm | Total Vector Len: %.2f",
+    ESP_LOGD(TAG_MOTION, "Path Length: %.2f mm | Total Vector Len: %.2f",
              block->path_length_mm, block->total_vector_length);
-    ESP_LOGI(TAG_MOTION, "Unit Vector (X,Y,Z,E): (%.2f, %.2f, %.2f, %.2f)", 
+    ESP_LOGD(TAG_MOTION, "Unit Vector (X,Y,Z,E): (%.2f, %.2f, %.2f, %.2f)", 
              block->unit_vec[0], block->unit_vec[1], block->unit_vec[2], block->unit_vec[3]);
 
     // Velocities & Accelerations
-    ESP_LOGI(TAG_MOTION, "Velocities - Entry: %.2f | Cruise: %.2f | Exit: %.2f", 
+    ESP_LOGD(TAG_MOTION, "Velocities - Entry: %.2f | Cruise: %.2f | Exit: %.2f", 
              block->v_entry, block->v_cruise, block->v_exit);
-    ESP_LOGI(TAG_MOTION, "Max Accel - Path: %.2f | Vector: %.2f", 
+    ESP_LOGD(TAG_MOTION, "Max Accel - Path: %.2f | Vector: %.2f", 
              block->max_path_acceleration, block->max_vector_acceleration);
 
     // Axis Mapping & Steps
-    ESP_LOGI(TAG_MOTION, "Master Axis: %d | Master Steps: %d  | Master Steps/mm: %.2f", 
+    ESP_LOGD(TAG_MOTION, "Master Axis: %d | Master Steps: %d  | Master Steps/mm: %.2f", 
              block->master_axis, block->master_steps, block->master_steps_per_mm);
-    ESP_LOGI(TAG_MOTION, "Dir Bits: 0x%02X", block->dir_bits);
-    ESP_LOGI(TAG_MOTION, "Axis Steps (X,Y,Z,E): (%d, %d, %d, %d)", block->steps[0], block->steps[1], 
+    ESP_LOGD(TAG_MOTION, "Dir Bits: 0x%02X", block->dir_bits);
+    ESP_LOGD(TAG_MOTION, "Axis Steps (X,Y,Z,E): (%d, %d, %d, %d)", block->steps[0], block->steps[1], 
             block->steps[2], block->steps[3]);
 
     // Trapezoidal Phase Step Counts
-    ESP_LOGI(TAG_MOTION, "Phases - Accel Steps: %d | Cruise Steps: %d | Decel Steps: %d", 
+    ESP_LOGD(TAG_MOTION, "Phases - Accel Steps: %d | Cruise Steps: %d | Decel Steps: %d", 
             block->accel_steps, block->cruise_steps, block->decel_steps);
 }
