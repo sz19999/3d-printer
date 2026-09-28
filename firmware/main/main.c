@@ -66,29 +66,110 @@ static volatile float g_pos_mm[3]        = {0};    // step generator: X/Y/Z afte
 
 void print_motion_block(const PlannedMotion* block);
 
+#define SD_READ_RETRIES     5       // tries per line: card remounts after a read error before stopping the print
+#define SD_RETRY_DELAY_MS   500
+
+// End of the print for the streamer. One file per boot: park here for good
+// (returning would make FreeRTOS abort and reboot the ESP32).
+static void sd_park_forever(void) {
+    g_file_done = true;
+    while (1) {
+        vTaskDelay(portMAX_DELAY);
+    }
+}
+
+// Explicit case: a card read error mid-print (the card stops answering for a moment, e.g. from
+// heater noise on its supply). FatFs keeps the error on the open file and the card may need a
+// full re-init, so: close the file, remount the card, reopen the file and seek back to the start
+// of the line that failed. The queued moves keep the printer busy meanwhile.
+// Stops the print (heaters off) and parks the task if the line still can't be read.
+static FILE* sd_recover_file(FILE* f, sdmmc_card_t** card, sdmmc_host_t* host, long line_start) {
+    // Explicit case: the card remounts fine but the same spot fails again every time (e.g. a bad
+    // sector). The tries are counted per line across calls; counting per call restarted at 1
+    // after every successful remount and retried forever with the heaters on.
+    static long s_failed_line = -1;
+    static int  s_attempt     = 0;
+    if (line_start != s_failed_line) {
+        s_failed_line = line_start;
+        s_attempt = 0;
+    }
+
+    fclose(f);
+
+    while (s_attempt < SD_READ_RETRIES) {
+        s_attempt++;
+        ESP_LOGW(TAG_SD, "SD card read error at byte %ld - remounting the card (attempt %d of %d)",
+                 line_start, s_attempt, SD_READ_RETRIES);
+
+        if (*card != NULL) {
+            esp_vfs_fat_sdcard_unmount(MOUNT_POINT, *card);
+            spi_bus_free(host->slot);
+            *card = NULL;
+        }
+        vTaskDelay(pdMS_TO_TICKS(SD_RETRY_DELAY_MS));
+
+        sd_init(card, host);
+        if (*card == NULL) {
+            continue;
+        }
+
+        FILE* reopened = open_first_by_extension(MOUNT_POINT, ".gcode", "rb");
+        if (reopened != NULL && fseek(reopened, line_start, SEEK_SET) == 0) {
+            ESP_LOGI(TAG_SD, "SD card back - continuing from byte %ld", line_start);
+            g_file_bytes_read = line_start;
+            return reopened;
+        }
+        if (reopened != NULL) {
+            fclose(reopened);
+        }
+    }
+
+    ESP_LOGE(TAG_SD, "SD card READ ERROR at byte %ld of %ld - failed %d times, print stopped early! "
+             "Re-copy the file or try another SD card.", line_start, (long)g_file_size, SD_READ_RETRIES);
+    // Cancel the print like the missing-file case: with the running bit cleared the thermal task
+    // turns both heaters off (otherwise the hot nozzle would sit on the print indefinitely).
+    xEventGroupClearBits(sys_event_group, SYS_RUNNING_BIT);
+    sd_park_forever();
+    return NULL;
+}
+
 void sd_streamer_task(void *pvParameters) {
     ESP_LOGI(TAG_SD, "Task started successfully on core %d", xPortGetCoreID());
 
-    // block here until the bit is set.
-    xEventGroupWaitBits(
-        sys_event_group,
-        SYS_RUNNING_BIT,
-        pdFALSE,        // Don't clear bit on exit (so other tasks stay unblocked)
-        pdTRUE,         // Wait for all bits
-        portMAX_DELAY   // Wait indefinitely
-    );
-
-    // init & mount sd card
     sdmmc_card_t* card = NULL;
     sdmmc_host_t host  = SDSPI_HOST_DEFAULT();
-    sd_init(&card, &host);
+    FILE* f = NULL;
 
-    // find the first gcode file in the sd card
-    FILE* f = open_first_by_extension(MOUNT_POINT, ".gcode", "rb");
-    if (f == NULL) {
-        ESP_LOGE(TAG_SD, "Couldn't open gcode file!");
+    // Try again on every Start Print until a file opens. This task must never return
+    // (FreeRTOS then aborts and the ESP32 reboots), so a missing card or file cancels
+    // the print instead.
+    while (f == NULL) {
+        // block here until the bit is set.
+        xEventGroupWaitBits(
+            sys_event_group,
+            SYS_RUNNING_BIT,
+            pdFALSE,        // Don't clear bit on exit (so other tasks stay unblocked)
+            pdTRUE,         // Wait for all bits
+            portMAX_DELAY   // Wait indefinitely
+        );
+
+        // init & mount sd card
+        card = NULL;
+        sd_init(&card, &host);
+
+        // find the first gcode file in the sd card
+        f = open_first_by_extension(MOUNT_POINT, ".gcode", "rb");
+        if (f == NULL) {
+            ESP_LOGE(TAG_SD, "Couldn't open a .gcode file - print cancelled. Check the SD card and the file name.");
+            if (card != NULL) {
+                esp_vfs_fat_sdcard_unmount(MOUNT_POINT, card);
+                spi_bus_free(host.slot);
+            }
+            xEventGroupClearBits(sys_event_group, SYS_RUNNING_BIT);
+        }
     }
-    else {
+
+    {
         ESP_LOGI(TAG_SD, "Opened gcode file scuccessfuly!");
 
         // file size for the progress display
@@ -109,17 +190,52 @@ void sd_streamer_task(void *pvParameters) {
             );
 
             char gcode_line[GCODE_LINE_MAX_LEN];
+            long line_start = g_file_bytes_read;   // file offset of this line, to re-read it after a card error
 
             // read gcode line
-            if (fgets(gcode_line, sizeof(gcode_line), f) == NULL) {
-                ESP_LOGI(TAG_SD, "Reached to the end of the gcode file!");
-                g_file_done = true;
-                fclose(f);
-                vTaskDelay(pdMS_TO_TICKS(1000000)); 
-                continue;
+            char* got = fgets(gcode_line, sizeof(gcode_line), f);
+
+            // Explicit case: card read error. fgets can still return the first part of the line
+            // (last time a lone "G"), so check ferror before using the line at all.
+            if (ferror(f)) {
+                f = sd_recover_file(f, &card, &host, line_start);
+                continue;   // read this line again from its start
             }
 
-            g_file_bytes_read += strlen(gcode_line);
+            if (got == NULL) {
+                ESP_LOGI(TAG_SD, "Reached to the end of the gcode file!");
+                fclose(f);
+                sd_park_forever();
+            }
+
+            size_t line_len = strlen(gcode_line);
+            g_file_bytes_read += line_len;
+
+            // Explicit case: a line longer than the buffer. PrusaSlicer's settings block at the
+            // end of the file has lines like "; start_gcode = G28 ...\nG1 X60 E9 ..." that are
+            // hundreds of chars. fgets returned only the start; drop the whole line, or the rest
+            // would be read as separate lines and could run as real commands.
+            if (line_len == sizeof(gcode_line) - 1 && gcode_line[line_len - 1] != '\n') {
+                int c;
+                long dropped = 0;
+                while ((c = fgetc(f)) != EOF && c != '\n') {
+                    dropped++;
+                }
+                if (ferror(f)) {
+                    f = sd_recover_file(f, &card, &host, line_start);
+                    continue;   // read this long line again from its start
+                }
+                g_file_bytes_read += dropped + (c == '\n' ? 1 : 0);
+
+                if (dropped > 0) {
+                    if (gcode_line[0] != ';') {
+                        ESP_LOGW(TAG_SD, "Skipped a command line longer than %d chars: \"%.24s...\"",
+                                 (int)sizeof(gcode_line) - 1, gcode_line);
+                    }
+                    continue;
+                }
+                // dropped == 0: the line was exactly buffer-sized and complete; keep it.
+            }
 
             // dispatch gcode line
             if (xQueueSend(gcode_line_queue, gcode_line, portMAX_DELAY) == pdPASS) { // Wait indefinitely if queue is full

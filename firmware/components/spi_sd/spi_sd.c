@@ -27,7 +27,7 @@ void sd_init(sdmmc_card_t** card, sdmmc_host_t* host) {
     };
 
     host->slot = SPI2_HOST; // Select FSPI Peripheral
-    host->max_freq_khz = SDMMC_FREQ_DEFAULT;  // 20MHz speed
+    host->max_freq_khz = 5000;  // 5 MHz: G-code needs only a few kB/s, and a slower clock is far more tolerant of jumper wires and heater noise than 20 MHz
 
     // 2. Configure SPI Bus
     spi_bus_config_t bus_cfg = {
