@@ -95,12 +95,19 @@ static void IRAM_ATTR multi_axis_endstop_isr(void *arg) {
     }
 }
 
+// Number of RMT banks finished on the X channel. The TX-done notification is a single bit,
+// so two completions before the step task wakes merge into one wake-up; this count is
+// exact and tells the task how many banks actually finished.
+volatile uint32_t g_rmt_tx_done_count = 0;
+
 // callback triggered in ISR context when RMT finishes sending a buffer block
 static bool IRAM_ATTR rmt_stepper_done_cb(rmt_channel_handle_t tx_chan, const rmt_tx_done_event_data_t *edata, void *user_ctx) {
     BaseType_t high_task_woken = pdFALSE;
     TaskHandle_t generator_task_handle = (TaskHandle_t)user_ctx;
 
-    // Use xTaskNotifyFromISR with eSetBits to pass specific event flags
+    g_rmt_tx_done_count++;
+
+    // Use xTaskNotifyFromISR with eSetBits to pass specific event flags (wake-up only)
     xTaskNotifyFromISR(
         generator_task_handle,
         RMT_TX_DONE_BIT,
@@ -154,8 +161,48 @@ void register_stepper_callbacks(rmt_stepper_system_t *sys, TaskHandle_t generato
 }
 
 
-void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda, 
-    rmt_symbol_word_t buffers[NUM_AXES][SYMBOLS_PER_BLOCK], 
+#define RMT_MAX_DURATION_TICKS  32767   // an RMT symbol half holds 15 bits
+
+// Sets up a new block's ramp. In Austin's algorithm, ramp index n = the number of steps it takes
+// to reach a speed from rest: v^2 = 2*a*n*dS. Starting the ramp at the entry speed's index and
+// ending it at the exit speed's index makes consecutive blocks join at the planner's junction
+// speed. (Before, every block started from rest: whenever the planner let a line continue at
+// speed, the head stopped dead from full speed at the joint - lost steps / layer shifts.)
+static void start_block_ramp(multi_axis_dda_generator_t *dda) {
+    PlannedMotion *b = &dda->block;
+
+    // path distance per master step, so the ramp runs at the planned path acceleration
+    // (the accel/cruise/decel step counts use the same ratio)
+    float dS = 1.0f / b->master_steps_per_mm;
+    float a  = b->max_path_acceleration;
+
+    float v_cruise = b->v_cruise;
+    if (v_cruise < 0.1f) {
+        v_cruise = 0.1f;    // Explicit guard: never divide by a zero cruise speed (e.g. "F0")
+    }
+    float v_entry = fminf(b->v_entry, v_cruise);
+    float v_exit  = fminf(b->v_exit,  v_cruise);
+
+    dda->n_entry  = (uint32_t)lroundf((v_entry * v_entry) / (2.0f * a * dS));
+    dda->n_exit   = (uint32_t)lroundf((v_exit  * v_exit)  / (2.0f * a * dS));
+    dda->c_cruise = lroundf((dS / v_cruise) * 1000000.0f);
+
+    float c0_sec = sqrtf((2.0f * dS) / a);  // Austin's first step delay from rest
+    float c_sec;
+    if (dda->n_entry == 0) {
+        // From rest. Austin's 0.676 correction: the recurrence's first step comes out 45% too
+        // long, and without it the whole ramp lagged and reached only ~68% of the planned speed.
+        c_sec = 0.676f * c0_sec;
+    } else {
+        // Already moving at v_entry: the exact delay at that ramp index.
+        c_sec = c0_sec * (sqrtf((float)dda->n_entry + 1.0f) - sqrtf((float)dda->n_entry));
+    }
+    dda->c = lroundf(c_sec * 1000000.0f);   // convert seconds to microseconds
+    dda->rest = 0;
+}
+
+void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda,
+    rmt_symbol_word_t buffers[NUM_AXES][SYMBOLS_PER_BLOCK],
     size_t *generated_symbols
 ) {
     size_t symbol_idx = 0;
@@ -166,36 +213,33 @@ void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda,
 
         // 1. Compute Master Axis Step Delay via David Austin
         if (n == 0) {
-            float dS = 0;
-            if (b->master_axis == 0 || b->master_axis == 1) {
-                dS = 1.0f / STEPS_PER_MM_BELT;
-            }
-            else if (b->master_axis == 2) {
-                dS = 1.0f / STEPS_PER_MM_SCREW;
-            }
-            else if (b->master_axis == 3) {
-                dS = 1.0f / STEPS_PER_MM_GEAR;
-            }
-
-
-            float c0_sec = sqrtf((2.0f * dS) / b->max_path_acceleration);
-            dda->c = lroundf(c0_sec * 1000000.0f);  // convert seconds to microseconds
-            dda->rest = 0;
+            start_block_ramp(dda);
         } else if (n < b->accel_steps) {
+            // accelerate: one ramp index up
+            uint32_t k = dda->n_entry + n;
             int32_t top = (2 * dda->c) + dda->rest;
-            int32_t div = (4 * n) + 1;
+            int32_t div = (4 * k) + 1;
             dda->c -= top / div;
             dda->rest = top % div;
+        } else if (n == b->accel_steps && n < b->accel_steps + b->cruise_steps) {
+            // cruise starts: use the exact cruise delay so ramp rounding can't drift the speed
+            dda->c = dda->c_cruise;
+            dda->rest = 0;
         } else if (n >= b->accel_steps + b->cruise_steps) {
-            uint32_t m = b->master_steps - n;
+            // decelerate: one ramp index down (exact mirror of the acceleration), so the last
+            // step lands on the exit speed's index
+            uint32_t m = b->master_steps - n;   // steps left, this one included
             int32_t top = (2 * dda->c) + dda->rest;
-            int32_t div = (4 * m) + 1;
+            int32_t div = (4 * (dda->n_exit + m)) - 1;
             dda->c += top / div;
             dda->rest = top % div;
         }
 
+        // Explicit guard: very slow moves (under ~0.4 mm/s) would overflow the 15-bit RMT field
+        int32_t c_ticks = (dda->c > RMT_MAX_DURATION_TICKS) ? RMT_MAX_DURATION_TICKS : dda->c;
+
         uint16_t pulse_ticks = 2; // 2us HIGH pulse width
-        uint16_t low_ticks = (dda->c > pulse_ticks) ? (dda->c - pulse_ticks) : 1;
+        uint16_t low_ticks = (c_ticks > pulse_ticks) ? (c_ticks - pulse_ticks) : 1;
 
         for (int axis = 0; axis < NUM_AXES; axis++) {
             bool send_step = false;
@@ -220,8 +264,8 @@ void generate_dda_rmt_buffers(multi_axis_dda_generator_t *dda,
             } else {
                 // RMT treats a duration of 0 as "hold this level forever", not "zero ticks" -
                 // split the idle period into two nonzero halves so the channel actually finishes.
-                uint16_t idle_half1 = (dda->c > 1) ? (uint16_t)(dda->c / 2) : 1;
-                uint16_t idle_half2 = (dda->c > idle_half1) ? (uint16_t)(dda->c - idle_half1) : 1;
+                uint16_t idle_half1 = (c_ticks > 1) ? (uint16_t)(c_ticks / 2) : 1;
+                uint16_t idle_half2 = (c_ticks > idle_half1) ? (uint16_t)(c_ticks - idle_half1) : 1;
 
                 buffers[axis][symbol_idx] = (rmt_symbol_word_t){
                     .duration0 = idle_half1,

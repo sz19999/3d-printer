@@ -745,6 +745,25 @@ void thermal_task(void *pvParameters) {
     }
 }
 
+// RMT TX-done arrives as a single notification bit (eSetBits), so two banks that finish
+// before the step task wakes merge into one wake-up. Counting wake-ups then misses a
+// completion and the drain waits forever with the motors stopped mid-print. The done ISR
+// also counts completions exactly (g_rmt_tx_done_count); the notification only wakes us.
+// The poll timeout is a safety net and is normal while a long bank is still sending.
+#define STEP_WAIT_POLL_MS 100
+
+// Waits for an RMT TX-done or an endstop abort (bits in *notify_value, 0 on a poll timeout)
+// and returns how many banks finished since the last call (2 when wake-ups merged).
+static uint32_t step_wait_for_event(uint32_t *notify_value, uint32_t *done_seen) {
+    if (xTaskNotifyWait(0, ULONG_MAX, notify_value, pdMS_TO_TICKS(STEP_WAIT_POLL_MS)) != pdTRUE) {
+        *notify_value = 0;
+    }
+    uint32_t now = g_rmt_tx_done_count;
+    uint32_t finished = now - *done_seen;
+    *done_seen = now;
+    return finished;
+}
+
 // Endstop input pin per axis id (X, Y, Z), for level checks from the step task.
 static const gpio_num_t k_endstop_pins[3] = { ENDSTOP_X_GPIO, ENDSTOP_Y_GPIO, ENDSTOP_Z_GPIO };
 
@@ -856,6 +875,8 @@ void step_generator_task(void *pvParameters) {
 
             uint32_t active_bank = 0;
             uint32_t active_transports = 0;
+            // baseline for this block's completions: read before its first transmit
+            uint32_t done_seen = g_rmt_tx_done_count;
 
             // prime bank 0 (bank A)
             size_t symbols_written_a = 0;
@@ -898,10 +919,11 @@ void step_generator_task(void *pvParameters) {
             // streaming loop with endstop abort protection
             uint32_t iterations = 0;
             while (dda.master_step_count < dda.block.master_steps && !abort_triggered) {
-                
+
                 // block until either: RMT TX Done fires OR Endstop ISR sends Abort Notification
-                if (xTaskNotifyWait(0, ULONG_MAX, &notify_value, portMAX_DELAY) == pdTRUE) {
-                    
+                uint32_t finished = step_wait_for_event(&notify_value, &done_seen);
+
+                {
                     // check if notification came from Endstop ISR (bits 0x0F reserved for axis aborts)
                     if (notify_value & 0x0F) {
                         ESP_LOGE(TAG_RMT, ">>> ABORT SIGNAL RECEIVED (0x%02X) - CANCELLING BLOCK <<<", (unsigned int)notify_value);
@@ -914,8 +936,15 @@ void step_generator_task(void *pvParameters) {
                         break; // exit streaming loop immediately
                     }
 
-                    // otherwise, notification is RMT TX_DONE callback
-                    active_transports--;
+                    // otherwise: RMT TX_DONE. Nothing finished yet (poll timeout) -> keep waiting.
+                    if (finished == 0) {
+                        continue;
+                    }
+                    // Never release more banks than are in flight (at most the two ping-pong banks).
+                    if (finished > active_transports) {
+                        finished = active_transports;
+                    }
+                    active_transports -= finished;
 
                     // Re-arm the approaching endstop: the ISR self-masks on its
                     // first (usually noise) edge, so without this a real touch
@@ -933,25 +962,28 @@ void step_generator_task(void *pvParameters) {
                         endstop_set_armed(approach_axis, true);
                     }
 
-                    // refill released bank
-                    size_t symbols_written = 0;
-                    generate_dda_rmt_buffers(&dda, ping_pong_buff[active_bank], &symbols_written);
+                    // refill every released bank (both when their TX-done wake-ups merged),
+                    // oldest first, so a bank still sending is never overwritten
+                    for (uint32_t k = 0; k < finished && dda.master_step_count < dda.block.master_steps; k++) {
+                        size_t symbols_written = 0;
+                        generate_dda_rmt_buffers(&dda, ping_pong_buff[active_bank], &symbols_written);
 
-                    if (symbols_written > 0) {
-                        for (int axis = 0; axis < NUM_AXES; axis++) {
-                            ESP_ERROR_CHECK(rmt_transmit(
-                                sys.tx_channels[axis], 
-                                sys.copy_encoders[axis],
-                                ping_pong_buff[active_bank][axis],
-                                symbols_written * sizeof(rmt_symbol_word_t),
-                                &tx_config
-                            ));
+                        if (symbols_written > 0) {
+                            for (int axis = 0; axis < NUM_AXES; axis++) {
+                                ESP_ERROR_CHECK(rmt_transmit(
+                                    sys.tx_channels[axis],
+                                    sys.copy_encoders[axis],
+                                    ping_pong_buff[active_bank][axis],
+                                    symbols_written * sizeof(rmt_symbol_word_t),
+                                    &tx_config
+                                ));
+                            }
+                            active_transports++;
                         }
-                        active_transports++;
-                    }
 
-                    active_bank ^= 1;
-                    iterations++;
+                        active_bank ^= 1;
+                        iterations++;
+                    }
                 }
             }
 
@@ -959,12 +991,14 @@ void step_generator_task(void *pvParameters) {
             if (!abort_triggered) {
                 // Normal Drain Phase: Wait for remaining queued transactions to finish
                 while (active_transports > 0) {
-                    if (xTaskNotifyWait(0, ULONG_MAX, &notify_value, portMAX_DELAY) == pdTRUE) {
-                        if (notify_value & 0x0F) { // Endstop hit during drain
-                            abort_triggered = true;
-                            break;
-                        }
-                        active_transports--;
+                    uint32_t finished = step_wait_for_event(&notify_value, &done_seen);
+                    if (notify_value & 0x0F) { // Endstop hit during drain
+                        abort_triggered = true;
+                        break;
+                    }
+                    if (finished > 0) {
+                        // exact count from the ISR: a merged wake-up releases both banks
+                        active_transports -= (finished > active_transports) ? active_transports : finished;
 
                         // Same level check as the streaming loop: a touch whose
                         // edge was rejected as bounce must still stop the approach.
@@ -1012,6 +1046,11 @@ void step_generator_task(void *pvParameters) {
                 for (int axis = 0; axis < NUM_AXES; axis++) {
                     rmt_disable(sys.tx_channels[axis]);
                     rmt_enable(sys.tx_channels[axis]);
+                }
+                // Let the restarted leftover (idle, ~µs) transactions finish now, so their
+                // TX-done counts land before the next block reads its done_seen baseline.
+                for (int axis = 0; axis < NUM_AXES; axis++) {
+                    rmt_tx_wait_all_done(sys.tx_channels[axis], 100);
                 }
 
                 if (motion.motion_mode == MOTION_MODE_HOMING) {

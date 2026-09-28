@@ -393,6 +393,19 @@ void compute_junction_velocity(RingBuffer* buffer) {
     uint8_t curr_idx = (buffer->head + BUFFER_SIZE - 1) % BUFFER_SIZE;
     uint8_t prev_idx = (curr_idx + BUFFER_SIZE - 1) % BUFFER_SIZE;
 
+    // Explicit cases where the head must be stopped at the joint (junction speed 0). The step
+    // generator now really carries this speed from one block into the next, so it must be real:
+    // - a pure E move (retract/unretract) has no XYZ direction to carry the speed through
+    // - a homing move can be cut short by its endstop, so nothing may continue from it at speed
+    if (buffer->arr[prev_idx].path_length_mm < 0.00001f ||
+        buffer->arr[curr_idx].path_length_mm < 0.00001f ||
+        buffer->arr[prev_idx].motion_mode == MOTION_MODE_HOMING ||
+        buffer->arr[curr_idx].motion_mode == MOTION_MODE_HOMING) {
+        buffer->arr[prev_idx].v_exit = 0.0f;
+        buffer->arr[curr_idx].v_entry = 0.0f;
+        return;
+    }
+
     // extract N and N-1 motion profiles cartesian unit vectors
     float ux1 = buffer->arr[prev_idx].cartesian_unit_vec[0];
     float uy1 = buffer->arr[prev_idx].cartesian_unit_vec[1];
@@ -419,8 +432,14 @@ void compute_junction_velocity(RingBuffer* buffer) {
 
     // check edge cases
     if (cos_phi + epsilon > 1.0f) {
-        // if the angle is 0 degrees, lines are in the same direction
+        // if the angle is 0 degrees, lines are in the same direction.
+        // The junction can't be faster than either block's cruise: when a straight line
+        // continues slower (e.g. a slicer slowdown), entering at the previous cruise would
+        // make this block's v_entry > v_cruise.
         v_junction = buffer->arr[prev_idx].v_cruise;
+        if (v_junction > buffer->arr[curr_idx].v_cruise) {
+            v_junction = buffer->arr[curr_idx].v_cruise;
+        }
     }
     else if (cos_phi - epsilon < -1.0f) {
         // if the angle is 180 degrees, lines are opposite directions
@@ -433,7 +452,12 @@ void compute_junction_velocity(RingBuffer* buffer) {
         float cos_half_phi = sqrtf((1.0f + cos_phi) / 2.0f); // trigo identity
 
         float j = JUNCTION_DEVIATION;   // the distance between the real junction point and the theoretical arc center
-        float a = buffer->arr[prev_idx].max_path_acceleration; // the max centripetal acceleration is the same max path acceleration
+        // the max centripetal acceleration is the max path acceleration - the lower of the two
+        // blocks, so e.g. an XY -> Z joint respects Z's much lower acceleration
+        float a = buffer->arr[prev_idx].max_path_acceleration;
+        if (buffer->arr[curr_idx].max_path_acceleration < a) {
+            a = buffer->arr[curr_idx].max_path_acceleration;
+        }
         
         v_junction = sqrtf( (j * a * cos_half_phi) / (1.0f - cos_half_phi) );
 
@@ -545,15 +569,12 @@ void forward_pass(RingBuffer* buffer) {
     if not clamp it. 
 */
 void recalculate_cruise_speed(RingBuffer* buffer) {
-    // early exit
-    if (buffer->count < 2) {
-        return;
-    }
-
+    // Runs for a single block too: a lone block (first move, or the last one before a wait)
+    // still needs its cruise clamped so it can stop within its length.
     uint8_t curr_idx = buffer->tail;
 
-    // iterate the motion profiles buffer
-    while (curr_idx != buffer->head) {
+    // iterate the motion profiles buffer (by count: when the buffer is full, head == tail)
+    for (uint8_t i = 0; i < buffer->count; i++) {
         // extract required parameters
         float v_entry = buffer->arr[curr_idx].v_entry;
         float v_exit = buffer->arr[curr_idx].v_exit;
@@ -581,13 +602,12 @@ void recalculate_cruise_speed(RingBuffer* buffer) {
     compute required parameters for the Step Generator
 */
 void finalize_motion_profiles(RingBuffer* buffer) {
-    // early exit
-    if (buffer->count < 2) {
-        return;
-    }
-
+    // Runs for a single block too: a lone block used to keep accel/cruise/decel steps = 0,
+    // and the step generator crawled through the whole move at its starting speed.
     uint8_t curr_idx = buffer->tail;
-    while (curr_idx != buffer->head) {
+
+    // by count: when the buffer is full, head == tail
+    for (uint8_t i = 0; i < buffer->count; i++) {
 
         // compute the electrical steps required in the acceleration, deceleration and cruise phase.
         float v_entry = buffer->arr[curr_idx].v_entry;
@@ -597,6 +617,16 @@ void finalize_motion_profiles(RingBuffer* buffer) {
 
         float accel_dist = (v_cruise * v_cruise - v_entry * v_entry) / (2.0f * a);
         float decel_dist = (v_cruise * v_cruise - v_exit * v_exit) / (2.0f * a);
+
+        // Explicit guard: an entry/exit faster than cruise must not become a negative
+        // distance. Cast to uint32_t below, -118 steps turned into ~4.29 billion accel
+        // steps and the step generator accelerated for the whole block.
+        if (accel_dist < 0.0f) {
+            accel_dist = 0.0f;
+        }
+        if (decel_dist < 0.0f) {
+            decel_dist = 0.0f;
+        }
         // pure E moves have path_length_mm == 0 (no XYZ travel); fall back to the E distance
         float move_distance = (buffer->arr[curr_idx].path_length_mm > 0.00001f)
             ? buffer->arr[curr_idx].path_length_mm
@@ -894,12 +924,27 @@ void compute_master_axis_steps(PlannedMotion* motion) {
 }
 
 /*
-    computes the velocity scale factor based on master axis type
+    computes the velocity scale factor: master axis steps per mm of PATH.
+    the accel/cruise/decel distances and the step generator's ramp are measured along the
+    path, and on a diagonal the master axis covers only part of the path. Using the axis'
+    own steps/mm overcounted the phases (x1.41 at 45 deg): accel + cruise already filled the
+    whole block, the deceleration never ran and the head stopped dead from full speed at the
+    end of every diagonal move (lost steps = layer shifts). It also ran diagonals 1.41x too fast.
 */
 void compute_master_axis_steps_per_mm(PlannedMotion* motion) {
-    // steps per mm for each axis: x, y, z, e
-    float steps_per_mm[] = {STEPS_PER_MM_BELT, STEPS_PER_MM_BELT, STEPS_PER_MM_SCREW, STEPS_PER_MM_GEAR};
-    motion->master_steps_per_mm = steps_per_mm[motion->master_axis];
+    // pure E moves have path_length_mm == 0 (no XYZ travel); fall back to the E distance
+    float move_distance = (motion->path_length_mm > 0.00001f)
+        ? motion->path_length_mm
+        : motion->total_vector_length;
+
+    if (motion->master_steps > 0 && move_distance > 0.00001f) {
+        motion->master_steps_per_mm = (float)motion->master_steps / move_distance;
+    } else {
+        // Explicit case: a block with no steps (e.g. "G1 F900" alone) - keep the axis' own ratio
+        // so the value is never 0 (the step generator divides by it).
+        float steps_per_mm[] = {STEPS_PER_MM_BELT, STEPS_PER_MM_BELT, STEPS_PER_MM_SCREW, STEPS_PER_MM_GEAR};
+        motion->master_steps_per_mm = steps_per_mm[motion->master_axis];
+    }
 }
 
 

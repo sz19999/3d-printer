@@ -57,7 +57,10 @@ typedef struct {
     uint32_t master_step_count;
     int32_t  c;    // Current Master step delay (RMT ticks)
     int32_t  rest; // Precision remainder
-    
+    uint32_t n_entry;   // Austin ramp index of the block's entry speed (steps from rest to v_entry)
+    uint32_t n_exit;    // Austin ramp index of the block's exit speed
+    int32_t  c_cruise;  // step delay at the cruise speed (RMT ticks)
+
     PlannedMotion block;
 } multi_axis_dda_generator_t;
 
@@ -81,6 +84,7 @@ void init_endstops(void);
 void endstop_set_armed(uint8_t axis_id, bool armed);
 
 // DIAGNOSTIC INSTRUMENTATION (temporary): endstop ISR hit counters, indexed by axis id.
+extern volatile uint32_t g_rmt_tx_done_count;   // RMT banks finished (X channel), counted in the ISR
 extern volatile uint32_t g_endstop_raw_isr_hits[NUM_AXES];
 extern volatile uint32_t g_endstop_confirmed_low[NUM_AXES];
 
