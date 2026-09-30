@@ -1,6 +1,6 @@
 ﻿[Design]
 Version=1.0
-HierarchyMode=0
+HierarchyMode=1
 ChannelRoomNamingStyle=0
 ReleasesFolder=
 ChannelDesignatorFormatString=$Component_$RoomName
@@ -98,6 +98,10 @@ ClassGenNCAutoScope=None
 DItemRevisionGUID=
 GenerateClassCluster=0
 DocumentUniqueId=UXBSSDNY
+
+[GeneratedDocument1]
+DocumentPath=Project Outputs for PCB_Project\Design Rule Check - PCB.html
+DItemRevisionGUID=
 
 [Configuration1]
 Name=Sources
@@ -706,7 +710,7 @@ OutputDefault1=0
 Type1=1
 Type2=1
 Type3=1
-Type4=1
+Type4=0
 Type5=1
 Type6=1
 Type7=1
@@ -721,7 +725,7 @@ Type15=1
 Type16=1
 Type17=1
 Type18=1
-Type19=1
+Type19=0
 Type20=1
 Type21=1
 Type22=1
