@@ -16,12 +16,14 @@ firmware/tests/.clangd
 firmware/tests/sdkconfig
 firmware/tests/sdkconfig.old
 
+.clangd
+.vscode
+
 # host-side files, builds, etc.
 tests/build/
 *.exe
 *.o
 *.log
-
 
 # PCB Files
 pcb/PCB_Project/History
