@@ -833,9 +833,9 @@ void step_generator_task(void *pvParameters) {
             g_homing_block = (motion.motion_mode == MOTION_MODE_HOMING);
             g_block_executing = true;
 
-            // set direction pins
+            // set direction pins (DIR_INVERT_MASK compensates for reversed wiring)
             for (int i = 0; i < NUM_AXES; i++) {
-                gpio_set_level(dir_pins[i], (motion.dir_bits >> i) & 0x01);
+                gpio_set_level(dir_pins[i], ((motion.dir_bits ^ DIR_INVERT_MASK) >> i) & 0x01);
             }
 
             // initialize DDA state machine for new move block

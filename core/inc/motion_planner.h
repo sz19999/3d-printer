@@ -37,7 +37,7 @@ typedef struct {
     float max_vector_acceleration;  
     
     // pre-calculated step generator parameters:
-    uint8_t dir_bits;           // dir_bits = [x_dir, y_dir, z_dir, e_dir, -]
+    uint8_t dir_bits;           // dir_bits = [x_dir, y_dir, z_dir, e_dir, -], logical: 1 = negative (wiring polarity applied at the DIR pins)
     uint8_t master_axis;        // axis with the most steps 
     uint32_t steps[NUM_AXES];   // number of steps of each axis -> steps[] = [x_steps, y_steps, z_steps, e_steps]
     uint32_t master_steps;

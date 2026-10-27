@@ -10,9 +10,10 @@
 #define TMC2209_RX_PIN         GPIO_NUM_18
 #define TMC2209_READ_TIMEOUT_MS 100
 
+// UART address = MS1 + 2*MS2, set by the straps on the motherboard
 #define TMC2209_X_ADDR         0x00
-#define TMC2209_Z_ADDR         0x01
-#define TMC2209_E_ADDR         0x02
+#define TMC2209_E_ADDR         0x01
+#define TMC2209_Z_ADDR         0x02
 #define TMC2209_Y_ADDR         0x03
 
 // Registers:

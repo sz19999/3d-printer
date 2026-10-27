@@ -14,13 +14,18 @@
 
 #define X_STEP_PIN          GPIO_NUM_47   
 #define Y_STEP_PIN          GPIO_NUM_39
-#define Z_STEP_PIN          GPIO_NUM_40   
+#define Z_STEP_PIN          GPIO_NUM_41   // PCB routes STEP Z to GPIO41 and DIR Z to GPIO40
 #define E_STEP_PIN          GPIO_NUM_2
 
 #define X_DIR_PIN           GPIO_NUM_21 
 #define Y_DIR_PIN           GPIO_NUM_38 
-#define Z_DIR_PIN           GPIO_NUM_41 
+#define Z_DIR_PIN           GPIO_NUM_40
 #define E_DIR_PIN           GPIO_NUM_42
+
+// DIR pin polarity per axis (bit i = axis i), applied only when driving the DIR GPIOs.
+// X, Y and Z are wired reversed on the PCB, so their DIR levels are flipped here. dir_bits
+// from the planner stay logical (1 = negative / toward the endstop) for the homing logic.
+#define DIR_INVERT_MASK     ((1 << 0) | (1 << 1) | (1 << 2))   // X, Y, Z
 
 #define ENDSTOP_X_GPIO      GPIO_NUM_1
 #define ENDSTOP_Y_GPIO      GPIO_NUM_14
