@@ -13,6 +13,7 @@ This project involves the ground-up design and programming of a custom Cartesian
 ## Documents
 *    **[HW & SW Architecture Diagram](./docs/assets/)** - Architectural block diagrams
 *    **[PCB Schematics & Layout](./docs/)**
+*    **[Printer Picture & Video](./docs/assets/)**
 
 
 ## Technical Stack & Tools
